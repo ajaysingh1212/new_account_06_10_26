@@ -1,0 +1,458 @@
+<?php
+
+namespace App\Http\Controllers\Admin;
+
+use App\Http\Controllers\Controller;
+use App\Models\Party;
+use App\Models\ProductCategory;
+use App\Models\SalesInvoice;
+use App\Models\SalesTarget;
+use App\Models\SalesTargetItem;
+use App\Services\EntryVisibilityService;
+use Carbon\Carbon;
+use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpFoundation\StreamedResponse;
+
+class SalesTargetController extends Controller
+{
+    public function index(EntryVisibilityService $visibility)
+    {
+        $targets = $visibility->scopeForUser(SalesTarget::with(['party','items.productCategory'])->latest(), SalesTarget::class)->get();
+
+        $parties = $visibility->scopeForUser(Party::orderBy('display_name'), Party::class)->get();
+        $sales = $visibility->scopeForUser(SalesInvoice::with(['party','items.item.productCategory'])->where('status', 'posted')->latest(), SalesInvoice::class)->get();
+
+        $partyStats = [];
+        foreach ($parties as $party) {
+            $partySales = $sales->where('party_id', $party->id);
+            $totalAmount = $partySales->sum(fn($inv) => $inv->items->sum('line_total'));
+            $partyStats[$party->id] = [
+                'party' => $party,
+                'total_amount' => $totalAmount,
+                'invoice_count' => $partySales->count()
+            ];
+        }
+
+        return view('admin.sales-targets.index', compact('targets', 'partyStats'));
+    }
+
+    public function create(EntryVisibilityService $visibility)
+    {
+        return view('admin.sales-targets.create', $this->formData($visibility));
+    }
+
+    public function store(Request $request)
+    {
+        $data = $this->validateData($request);
+        $target = SalesTarget::create(array_intersect_key($data, array_flip(['company_id','party_id','period_type','starts_on','ends_on','status','notes'])) + ['created_by' => auth()->id()]);
+        $this->saveItems($target, $data);
+        return redirect()->route('admin.sales-targets.index')->with('success', 'Sales target created successfully.');
+    }
+
+    public function edit(SalesTarget $salesTarget, EntryVisibilityService $visibility)
+    {
+        $visibility->authorizeView($salesTarget);
+        $salesTarget->load('items');
+        return view('admin.sales-targets.edit', $this->formData($visibility, $salesTarget->id) + ['target' => $salesTarget]);
+    }
+
+    public function update(Request $request, SalesTarget $salesTarget, EntryVisibilityService $visibility)
+    {
+        $visibility->authorizeView($salesTarget);
+        $data = $this->validateData($request);
+        $salesTarget->update(array_intersect_key($data, array_flip(['company_id','party_id','period_type','starts_on','ends_on','status','notes'])));
+        $salesTarget->items()->delete();
+        $this->saveItems($salesTarget, $data);
+        return redirect()->route('admin.sales-targets.index')->with('success', 'Sales target updated successfully.');
+    }
+
+    public function destroy(SalesTarget $salesTarget, EntryVisibilityService $visibility)
+    {
+        $visibility->authorizeView($salesTarget);
+        $salesTarget->delete();
+        return back()->with('success', 'Sales target deleted successfully.');
+    }
+
+    public function report(Request $request, EntryVisibilityService $visibility)
+    {
+        [$from, $to, $quickPeriod] = $this->reportDates($request);
+        $partyId = $request->integer('party_id') ?: null;
+        $categoryId = $request->integer('product_category_id') ?: null;
+        $stateFilter = $request->input('party_state') ?: null;
+        $cityFilter = $request->input('party_city') ?: null;
+
+        $parties = $visibility->scopeForUser(Party::orderBy('display_name'), Party::class)->get();
+        $categories = ProductCategory::where('company_id', auth()->user()->current_company_id)->orderBy('name')->get();
+
+        $states = $visibility->scopeForUser(Party::query(), Party::class)
+            ->whereNotNull('state')->where('state', '!=', '')
+            ->distinct()->orderBy('state')->pluck('state');
+        $cities = $visibility->scopeForUser(Party::query(), Party::class)
+            ->whereNotNull('city')->where('city', '!=', '')
+            ->distinct()->orderBy('city')->pluck('city');
+
+        $targets = $visibility->scopeForUser(SalesTarget::with(['party','items.productCategory'])
+            ->where('starts_on', '<=', $to->toDateString())->where('ends_on', '>=', $from->toDateString()), SalesTarget::class)
+            ->when($partyId, fn ($q) => $q->where('party_id', $partyId))
+            ->when($stateFilter, fn ($q) => $q->whereHas('party', fn ($q2) => $q2->where('state', $stateFilter)))
+            ->when($cityFilter, fn ($q) => $q->whereHas('party', fn ($q2) => $q2->where('city', $cityFilter)))
+            ->get();
+
+        // NOTE: this collection is NOT filtered by category. It represents every posted
+        // sale for the selected date range/party/state/city — used both for per-category
+        // "actual" matching below, AND for the brand-new "Total Sales" KPI (same source
+        // of truth as the dashboard's "Sales" stat).
+        $sales = $visibility->scopeForUser(SalesInvoice::with(['party','items.item.productCategory'])
+            ->whereBetween('billing_date', [$from->toDateString(), $to->toDateString()]), SalesInvoice::class)
+            ->when($partyId, fn ($q) => $q->where('party_id', $partyId))
+            ->when($stateFilter, fn ($q) => $q->whereHas('party', fn ($q2) => $q2->where('state', $stateFilter)))
+            ->when($cityFilter, fn ($q) => $q->whereHas('party', fn ($q2) => $q2->where('city', $cityFilter)))
+            ->get();
+
+        $targetCategoryIdsByParty = [];
+        foreach ($targets as $target) {
+            $targetCategoryIdsByParty[$target->party_id] = array_values(array_unique(array_merge(
+                $targetCategoryIdsByParty[$target->party_id] ?? [],
+                $target->items->pluck('product_category_id')->filter()->map(fn ($id) => (int) $id)->all()
+            )));
+        }
+
+        $actuals = [];
+        $partyTotals = [];
+        $uncoveredSales = [];
+        $invoiceLineTotals = [];
+        foreach ($sales as $invoice) {
+            foreach ($invoice->items as $line) {
+                $catId = $line->item?->product_category_id;
+                $lineAmount = (float) $line->line_total;
+                $partyTotals[$invoice->party_id] = ($partyTotals[$invoice->party_id] ?? 0) + (float) $line->line_total;
+                $invoiceLineTotals[$invoice->id] = ($invoiceLineTotals[$invoice->id] ?? 0) + $lineAmount;
+
+                $coveredCategoryIds = $targetCategoryIdsByParty[$invoice->party_id] ?? [];
+                if (!$catId || !in_array((int) $catId, $coveredCategoryIds, true)) {
+                    $uncoveredSales[] = [
+                        'invoice_id' => $invoice->id,
+                        'invoice_no' => $invoice->invoice_no,
+                        'billing_date' => optional($invoice->billing_date)->format('d M Y'),
+                        'party' => $invoice->party?->display_name ?? 'Cash / Walk-in',
+                        'party_id' => $invoice->party_id,
+                        'item' => $line->item?->name ?? $line->description ?? 'Unknown item',
+                        'item_code' => $line->item?->item_code,
+                        'category' => $line->item?->productCategory?->name ?? 'Category not set',
+                        'category_id' => $catId,
+                        'quantity' => (float) $line->quantity,
+                        'amount' => $lineAmount,
+                        'reason' => $catId ? 'Party ke target me ye category set nahi hai' : 'Product category set nahi hai',
+                        'invoice_url' => route('admin.sales.show', $invoice),
+                    ];
+                }
+
+                if (!$catId || ($categoryId && $catId !== $categoryId)) continue;
+                $key = $invoice->party_id.'-'.$catId;
+                $actuals[$key]['amount'] = ($actuals[$key]['amount'] ?? 0) + (float) $line->line_total;
+                $actuals[$key]['quantity'] = ($actuals[$key]['quantity'] ?? 0) + (float) $line->quantity;
+            }
+        }
+
+        $invoiceGrandTotal = (float) $sales->sum('grand_total');
+        $invoiceLineTotal = array_sum($invoiceLineTotals);
+        $uncoveredSummary = [
+            'items_count' => count($uncoveredSales),
+            'amount' => array_sum(array_column($uncoveredSales, 'amount')),
+            'invoice_line_total' => $invoiceLineTotal,
+            'invoice_grand_total' => $invoiceGrandTotal,
+            'invoice_adjustment' => $invoiceGrandTotal - $invoiceLineTotal,
+        ];
+
+        $rows = $targets->flatMap(function (SalesTarget $target) use ($actuals, $partyTotals, $categoryId) {
+            return $target->items->filter(fn ($item) => !$categoryId || $item->product_category_id === $categoryId)->map(function (SalesTargetItem $item) use ($target, $actuals, $partyTotals) {
+                $key = $target->party_id.'-'.$item->product_category_id;
+                $amount = (float) ($actuals[$key]['amount'] ?? 0);
+                $quantity = (float) ($actuals[$key]['quantity'] ?? 0);
+                $actual = $item->target_type === 'amount' ? $amount : ($item->target_type === 'quantity' ? $quantity : (($partyTotals[$target->party_id] ?? 0) > 0 ? ($amount / $partyTotals[$target->party_id]) * 100 : 0));
+                $targetValue = (float) $item->target_value;
+                return [
+                    'party' => $target->party?->display_name ?? 'Cash / Walk-in',
+                    'party_id' => $target->party_id,
+                    'party_state' => $target->party?->state,
+                    'party_city' => $target->party?->city,
+                    'category' => $item->productCategory?->name ?? '-',
+                    'category_id' => $item->product_category_id,
+                    'period' => ucfirst(str_replace('_', ' ', $target->period_type)),
+                    'target_type' => $item->target_type,
+                    'target' => $targetValue,
+                    'actual' => $actual,
+                    'actual_amount' => $amount,
+                    'actual_quantity' => $quantity,
+                    'achievement' => $targetValue > 0 ? ($actual / $targetValue) * 100 : 0,
+                    'starts_on' => $target->starts_on->format('d M Y'),
+                    'ends_on' => $target->ends_on->format('d M Y'),
+                ];
+            });
+        })->values();
+
+        // ===== FIXED KPI SUMMARY =====
+        // Previously "target" summed target_value across ALL target types (percent + amount
+        // + quantity) into a single number — meaningless, since 45% + ₹50,000 + 120 units
+        // can't be added together. That's what was showing a "wrong" Total Target number.
+        //
+        // Fix: "Total Target" (and its achievement %) is now computed ONLY from amount-type
+        // target rows, so it stays in ₹ and lines up correctly with "Actual Amount"
+        // (which is always a ₹ figure regardless of the row's target_type).
+        $amountRows = $rows->where('target_type', 'amount');
+
+        $summary = [
+            'target' => $amountRows->sum('target'),
+            'amount' => $rows->sum('actual_amount'),
+            'quantity' => $rows->sum('actual_quantity'),
+            // NEW: pure overall sales for this filter set — same source as the dashboard's
+            // "Sales" card, completely independent of category/target matching.
+            'total_sales' => (float) $sales->sum('grand_total'),
+        ];
+        // Target Achieved % = Actual Amount * 100 / Total Target (amount-based)
+        $summary['achievement'] = $summary['target'] > 0 ? ($summary['amount'] / $summary['target']) * 100 : 0;
+        // NEW: Target Achieved % using overall Total Sales instead of matched Actual Amount
+        $summary['achievement_on_total_sales'] = $summary['target'] > 0 ? ($summary['total_sales'] / $summary['target']) * 100 : 0;
+
+        $charts = ['labels' => $rows->pluck('category')->values(), 'target' => $rows->pluck('target')->values(), 'actual' => $rows->pluck('actual')->values(), 'achievement' => $rows->pluck('achievement')->values()];
+        $filters = [
+            'from' => $from->toDateString(),
+            'to' => $to->toDateString(),
+            'party_id' => $partyId,
+            'product_category_id' => $categoryId,
+            'party_state' => $stateFilter,
+            'party_city' => $cityFilter,
+            'quick_period' => $quickPeriod,
+        ];
+
+        $progress = $rows->groupBy('category_id')->map(function ($group) {
+            $target = $group->sum('target');
+            $actual = $group->sum('actual');
+            return [
+                'category_id' => $group->first()['category_id'],
+                'category' => $group->first()['category'],
+                'target_type' => $group->first()['target_type'],
+                'target' => $target,
+                'actual' => $actual,
+                'achievement' => $target > 0 ? ($actual / $target) * 100 : 0,
+                'parties_count' => $group->pluck('party_id')->unique()->count(),
+            ];
+        })->sortByDesc('achievement')->values();
+        $selectedPartyName = $partyId ? optional($parties->firstWhere('id', $partyId))->display_name : null;
+
+        return view('admin.sales-targets.report', compact(
+            'rows','summary','charts','filters','parties','categories','progress','selectedPartyName',
+            'states','cities','uncoveredSales','uncoveredSummary'
+        ));
+    }
+
+    public function categoryBreakdown(Request $request, EntryVisibilityService $visibility)
+    {
+        $request->validate([
+            'category_id' => ['required', 'integer', 'exists:product_categories,id'],
+        ]);
+        $categoryId = (int) $request->integer('category_id');
+        $stateFilter = $request->input('party_state') ?: null;
+        $cityFilter = $request->input('party_city') ?: null;
+
+        if ($month = $request->input('month')) {
+            $from = Carbon::parse($month.'-01')->startOfDay();
+            $to = $from->copy()->endOfMonth()->endOfDay();
+        } else {
+            $from = $request->filled('from_date') ? Carbon::parse($request->input('from_date'))->startOfDay() : now()->startOfMonth();
+            $to = $request->filled('to_date') ? Carbon::parse($request->input('to_date'))->endOfDay() : now()->endOfDay();
+        }
+
+        $category = ProductCategory::find($categoryId);
+
+        $targets = $visibility->scopeForUser(SalesTarget::with(['party', 'items' => fn ($q) => $q->where('product_category_id', $categoryId)])
+                ->where('starts_on', '<=', $to->toDateString())
+                ->where('ends_on', '>=', $from->toDateString()), SalesTarget::class)
+            ->when($stateFilter, fn ($q) => $q->whereHas('party', fn ($q2) => $q2->where('state', $stateFilter)))
+            ->when($cityFilter, fn ($q) => $q->whereHas('party', fn ($q2) => $q2->where('city', $cityFilter)))
+            ->get()
+            ->filter(fn (SalesTarget $t) => $t->items->isNotEmpty());
+
+        $sales = $visibility->scopeForUser(SalesInvoice::with(['party', 'items.item.productCategory'])
+                ->whereBetween('billing_date', [$from->toDateString(), $to->toDateString()]), SalesInvoice::class)
+            ->when($stateFilter, fn ($q) => $q->whereHas('party', fn ($q2) => $q2->where('state', $stateFilter)))
+            ->when($cityFilter, fn ($q) => $q->whereHas('party', fn ($q2) => $q2->where('city', $cityFilter)))
+            ->get();
+
+        $partyTotals = [];
+        $actuals = [];
+        foreach ($sales as $invoice) {
+            foreach ($invoice->items as $line) {
+                $catId = $line->item?->product_category_id;
+                $partyTotals[$invoice->party_id] = ($partyTotals[$invoice->party_id] ?? 0) + (float) $line->line_total;
+                if ($catId !== $categoryId) continue;
+                $actuals[$invoice->party_id]['amount'] = ($actuals[$invoice->party_id]['amount'] ?? 0) + (float) $line->line_total;
+                $actuals[$invoice->party_id]['quantity'] = ($actuals[$invoice->party_id]['quantity'] ?? 0) + (float) $line->quantity;
+            }
+        }
+
+        $parties = $targets->map(function (SalesTarget $target) use ($actuals, $partyTotals) {
+            $item = $target->items->first();
+            $amount = (float) ($actuals[$target->party_id]['amount'] ?? 0);
+            $quantity = (float) ($actuals[$target->party_id]['quantity'] ?? 0);
+            $actual = $item->target_type === 'amount' ? $amount
+                : ($item->target_type === 'quantity' ? $quantity
+                : ((($partyTotals[$target->party_id] ?? 0) > 0) ? ($amount / $partyTotals[$target->party_id]) * 100 : 0));
+            $targetValue = (float) $item->target_value;
+
+            return [
+                'party' => $target->party?->display_name ?? 'Cash / Walk-in',
+                'party_id' => $target->party_id,
+                'party_state' => $target->party?->state,
+                'party_city' => $target->party?->city,
+                'target_type' => $item->target_type,
+                'target' => $targetValue,
+                'actual' => $actual,
+                'achievement' => $targetValue > 0 ? ($actual / $targetValue) * 100 : 0,
+            ];
+        })->sortByDesc('achievement')->values();
+
+        $totalTarget = $parties->sum('target');
+        $totalActual = $parties->sum('actual');
+
+        $months = [];
+        $cursor = $from->copy()->startOfMonth();
+        $lastMonth = $to->copy()->startOfMonth();
+        while ($cursor->lte($lastMonth)) {
+            $months[$cursor->format('Y-m')] = ['label' => $cursor->format('M Y'), 'actual' => 0.0];
+            $cursor->addMonth();
+        }
+        foreach ($sales as $invoice) {
+            $mk = Carbon::parse($invoice->billing_date)->format('Y-m');
+            if (!isset($months[$mk])) continue;
+            foreach ($invoice->items as $line) {
+                if ($line->item?->product_category_id !== $categoryId) continue;
+                $months[$mk]['actual'] += (float) $line->line_total;
+            }
+        }
+
+        return response()->json([
+            'category' => $category?->name,
+            'category_id' => $categoryId,
+            'from' => $from->toDateString(),
+            'to' => $to->toDateString(),
+            'parties' => $parties,
+            'totals' => [
+                'target' => $totalTarget,
+                'actual' => $totalActual,
+                'achievement' => $totalTarget > 0 ? ($totalActual / $totalTarget) * 100 : 0,
+                'parties_count' => $parties->count(),
+            ],
+            'monthly' => array_values($months),
+        ]);
+    }
+
+    public function export(Request $request, EntryVisibilityService $visibility): StreamedResponse
+    {
+        $response = $this->report($request, $visibility);
+        $rows = $response->getData()['rows'];
+        return response()->streamDownload(function () use ($rows) {
+            $out = fopen('php://output', 'w');
+            fputcsv($out, ['Party','Product Category','Period','Target Type','Target','Actual','Achievement %','Actual Amount','Actual Quantity','Target Dates']);
+            foreach ($rows as $row) fputcsv($out, [$row['party'],$row['category'],$row['period'],$row['target_type'],$row['target'],$row['actual'],round($row['achievement'],2),$row['actual_amount'],$row['actual_quantity'],$row['starts_on'].' - '.$row['ends_on']]);
+            fclose($out);
+        }, 'sales-target-report.csv', ['Content-Type' => 'text/csv']);
+    }
+
+    public function print(Request $request, EntryVisibilityService $visibility)
+    {
+        $data = (array) $this->report($request, $visibility)->getData();
+        return view('admin.sales-targets.print', $data);
+    }
+
+    /**
+     * @param  int|null  $excludeTargetId  when editing, don't count the target being edited
+     *                                     as "already set" against itself.
+     */
+    private function formData(EntryVisibilityService $visibility, ?int $excludeTargetId = null): array
+    {
+        $parties = $visibility->scopeForUser(Party::orderBy('display_name'), Party::class)->get();
+        $categories = ProductCategory::where('company_id', auth()->user()->current_company_id)->orderBy('name')->get();
+
+        // NEW: build a party_id => summary map of existing sales targets, so the "Party"
+        // dropdown can show a 🎯 mark + the total goal value already configured for that
+        // party (across all their targets), instead of the user discovering duplicates
+        // only after saving.
+        $existingTargets = SalesTarget::with('items')
+            ->where('company_id', auth()->user()->current_company_id)
+            ->when($excludeTargetId, fn ($q) => $q->where('id', '!=', $excludeTargetId))
+            ->get();
+
+        $partyTargetSummary = [];
+        foreach ($existingTargets as $t) {
+            if (!$t->party_id || $t->items->isEmpty()) continue;
+            $partyTargetSummary[$t->party_id] ??= ['count' => 0, 'total' => 0, 'targets' => []];
+            $itemsTotal = (float) $t->items->sum('target_value');
+            $type = $t->items->first()->target_type ?? 'percent';
+            $partyTargetSummary[$t->party_id]['count']++;
+            $partyTargetSummary[$t->party_id]['total'] += $itemsTotal;
+            $partyTargetSummary[$t->party_id]['targets'][] = [
+                'id' => $t->id,
+                'period' => ucfirst(str_replace('_', ' ', $t->period_type)),
+                'starts_on' => optional($t->starts_on)->format('d M Y'),
+                'ends_on' => optional($t->ends_on)->format('d M Y'),
+                'status' => $t->status,
+                'type' => $type,
+                'total' => $itemsTotal,
+            ];
+        }
+
+        return compact('parties', 'categories', 'partyTargetSummary');
+    }
+
+    private function validateData(Request $request): array
+    {
+        $data = $request->validate([
+            'party_id' => ['required','exists:parties,id'],
+            'period_type' => ['required','in:daily,weekly,monthly,quarterly_3,quarterly_6,yearly'],
+            'starts_on' => ['required','date'],
+            'ends_on' => ['required','date','after_or_equal:starts_on'],
+            'status' => ['required','in:active,inactive'],
+            'notes' => ['nullable','string'],
+            'total_target_value' => ['required','numeric','min:0.01'],
+            'product_category_ids' => ['required','array','min:1'],
+            'product_category_ids.*' => ['required','distinct','exists:product_categories,id'],
+            'target_types' => ['required','array'],
+            'target_types.*' => ['required','in:amount,quantity,percent'],
+            'target_values' => ['required','array'],
+            'target_values.*' => ['required','numeric','min:0'],
+            'item_notes' => ['nullable','array'],
+        ]) + ['company_id' => auth()->user()->current_company_id];
+
+        if (count(array_unique($data['target_types'])) > 1) {
+            throw ValidationException::withMessages(['target_types' => 'Saare categories ke liye same Target Unit hona chahiye.']);
+        }
+
+        if (abs(array_sum($data['target_values']) - (float) $data['total_target_value']) > 0.01) {
+            throw ValidationException::withMessages(['target_values' => 'Category goals ka total, Total Target Value se match nahi ho raha.']);
+        }
+
+        return $data;
+    }
+
+    private function saveItems(SalesTarget $target, array $data): void
+    {
+        foreach ($data['product_category_ids'] as $index => $category) $target->items()->create(['product_category_id' => $category, 'target_type' => $data['target_types'][$index] ?? 'percent', 'target_value' => $data['target_values'][$index] ?? 0, 'notes' => $data['item_notes'][$index] ?? null]);
+    }
+
+    private function reportDates(Request $request): array
+    {
+        $quick = $request->input('quick_period');
+        $today = now()->startOfDay();
+        if ($quick === 'last_month') $from = $today->copy()->subMonth()->startOfMonth();
+        elseif ($quick === 'this_month') $from = $today->copy()->startOfMonth();
+        elseif ($quick === 'last_3_months') $from = $today->copy()->subMonths(2)->startOfMonth();
+        elseif ($quick === 'last_6_months') $from = $today->copy()->subMonths(5)->startOfMonth();
+        elseif ($quick === 'last_9_months') $from = $today->copy()->subMonths(8)->startOfMonth();
+        elseif ($quick === 'this_year') $from = $today->copy()->startOfYear();
+        else $from = Carbon::parse($request->input('from_date', $today->copy()->startOfMonth()->toDateString()))->startOfDay();
+        $to = in_array($quick, ['last_month','this_month','last_3_months','last_6_months','last_9_months','this_year'], true) ? ($quick === 'last_month' ? $today->copy()->subMonth()->endOfMonth() : $today->copy()->endOfDay()) : Carbon::parse($request->input('to_date', $today->toDateString()))->endOfDay();
+        return [$from, $to, $quick ?: 'custom'];
+    }
+}

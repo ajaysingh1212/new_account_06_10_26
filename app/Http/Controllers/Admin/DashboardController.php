@@ -1,0 +1,711 @@
+<?php
+namespace App\Http\Controllers\Admin;
+
+use App\Http\Controllers\Controller;
+use App\Models\AuditLog;
+use App\Models\BankAccount;
+use App\Models\ChequeLeaf;
+use App\Models\Company;
+use App\Models\CostCenter;
+use App\Models\CreditNote;
+use App\Models\DeliveryChallan;
+use App\Models\Estimate;
+use App\Models\EstimateItem;
+use App\Models\Expense;
+use App\Models\Item;
+use App\Models\Party;
+use App\Models\PartyPaymentAllocation;
+use App\Models\PartyPayment;
+use App\Models\PendingOrder;
+use App\Models\ProductCategory;
+use App\Models\PurchaseBill;
+use App\Models\PurchaseBillItem;
+use App\Models\Role;
+use App\Models\SalesInvoice;
+use App\Models\SalesInvoiceItem;
+use App\Models\StockMovement;
+use App\Models\User;
+use App\Services\EntryVisibilityService;
+use App\Services\AgeingSlabService;
+use App\Services\PartyOutstandingService;
+use App\Services\SalesProfitService;
+use Carbon\Carbon;
+use Illuminate\Http\Request;
+
+class DashboardController extends Controller
+{
+    public function index(Request $request, EntryVisibilityService $visibility, AgeingSlabService $ageingSlabs, PartyOutstandingService $outstanding, SalesProfitService $profits)
+    {
+        $user = auth()->user();
+        $companyId = $user->isSuperAdmin() ? $request->integer('company_id') : $user->current_company_id;
+        [$period, $from, $to] = $this->dateRange($request);
+        $companiesFilter = $user->isSuperAdmin() ? Company::orderBy('name')->get() : collect();
+
+        $creditNoteQuery = CreditNote::with(['invoice', 'party', 'items.item', 'creator']);
+        $creditNoteQuery = $user->isSuperAdmin()
+            ? $this->scope($creditNoteQuery, $companyId)
+            : $visibility->scopeForUser($creditNoteQuery, CreditNote::class);
+        $creditNoteRows = $creditNoteQuery
+            ->whereBetween('credit_note_date', [$from, $to])
+            ->latest('credit_note_date')
+            ->latest('id')
+            ->get()
+            ->map(fn(CreditNote $note) => [
+                'id' => $note->id,
+                'number' => $note->credit_note_no,
+                'date' => $note->credit_note_date?->format('d M Y'),
+                'invoice_id' => $note->sales_invoice_id,
+                'invoice' => $note->invoice?->invoice_no ?: '-',
+                'party' => $note->party?->display_name ?: 'Cash / Walk-in',
+                'gstin' => $note->party?->gstin ?: '-',
+                'taxable' => max(0, (float) $note->grand_total - (float) $note->tax_amount),
+                'tax' => (float) $note->tax_amount,
+                'total' => (float) $note->grand_total,
+                'reason' => $note->reason ?: '-',
+                'return_received' => $note->hasCompleteSalesReturn(),
+                'created_by' => $note->creator?->name ?: 'System',
+                'credit_note_url' => route('admin.credit-notes.show', $note),
+                'invoice_url' => $note->invoice ? route('admin.sales.show', $note->invoice) : null,
+                'items' => $note->items->map(fn($line) => [
+                    'name' => $line->item?->name ?: 'Item',
+                    'sku' => $line->item?->item_code ?: '-',
+                    'quantity' => (float) $line->quantity,
+                    'tax_percent' => (float) $line->tax_percent,
+                    'tax' => (float) $line->tax_amount,
+                    'total' => (float) $line->line_total,
+                ])->values()->all(),
+            ])
+            ->values();
+
+        if ($user->isSuperAdmin()) {
+            $stats = [
+                'companies'   => Company::count(),
+                'users'       => User::count(),
+                'roles'       => Role::count(),
+                'admins'      => User::where('user_type', 'admin')->count(),
+                'active_companies' => Company::where('is_active', true)->count(),
+                'sales' => $this->scope(SalesInvoice::query(), $companyId)->whereBetween('billing_date', [$from, $to])->sum('grand_total'),
+                'purchases' => $this->scope(PurchaseBill::query(), $companyId)->whereBetween('billing_date', [$from, $to])->sum('grand_total'),
+                'estimates' => $this->scope(Estimate::query(), $companyId)->whereBetween('estimate_date', [$from, $to])->count(),
+                'estimate_amount' => $this->scope(Estimate::query(), $companyId)->whereBetween('estimate_date', [$from, $to])->sum('grand_total'),
+                'total_collection' => $this->scope(PartyPayment::query(), $companyId)->where('payment_type', 'payment_in')->whereBetween('payment_date', [$from, $to])->sum('total_amount'),
+                'pending_expenses' => $this->scope(Expense::query(), $companyId)->where('status', 'pending_approval')->count(),
+            ];
+            $recentLogs = AuditLog::with('user','company')
+                ->when($companyId, fn($q) => $q->where('company_id', $companyId))
+                ->whereBetween('created_at', [Carbon::parse($from)->startOfDay(), Carbon::parse($to)->endOfDay()])
+                ->latest('created_at')
+                ->paginate(5, ['*'], 'activity_page');
+            $companies = Company::withCount(['users','roles'])->latest()->take(6)->get();
+        } else {
+            $partyQuery = $visibility->scopeForUser(Party::query(), Party::class);
+            $bankQuery = $visibility->scopeForUser(BankAccount::query(), BankAccount::class);
+            $itemQuery = $visibility->scopeForUser(Item::query(), Item::class);
+            $stats = [
+                'users'  => User::whereHas('userRoles', fn($q) => $q->where('company_id', $companyId))->count(),
+                'roles'  => Role::where('company_id', $companyId)->count(),
+                'active' => User::whereHas('userRoles', fn($q) => $q->where('company_id', $companyId))
+                                ->where('is_active', true)->count(),
+                'parties' => (clone $partyQuery)->count(),
+                'party_payable' => (clone $partyQuery)->where('current_balance', '>', 0)->sum('current_balance'),
+                'party_receivable' => abs((clone $partyQuery)->where('current_balance', '<', 0)->sum('current_balance')),
+                'cost_centers' => $visibility->scopeForUser(CostCenter::query(), CostCenter::class)->count(),
+                'bank_balance' => (clone $bankQuery)->where('account_type', 'bank')->sum('current_balance'),
+                'cash_balance' => (clone $bankQuery)->where('account_type', 'cash')->sum('current_balance'),
+                'sales' => $visibility->scopeForUser(SalesInvoice::query(), SalesInvoice::class)->whereBetween('billing_date', [$from, $to])->sum('grand_total'),
+                'purchases' => $visibility->scopeForUser(PurchaseBill::query(), PurchaseBill::class)->whereBetween('billing_date', [$from, $to])->sum('grand_total'),
+                'items' => (clone $itemQuery)->count(),
+                'low_stock' => (clone $itemQuery)->whereNotNull('low_stock_qty')->whereColumn('current_stock', '<=', 'low_stock_qty')->count(),
+                'estimates' => $visibility->scopeForUser(Estimate::query(), Estimate::class)->whereBetween('estimate_date', [$from, $to])->count(),
+                'estimate_amount' => $visibility->scopeForUser(Estimate::query(), Estimate::class)->whereBetween('estimate_date', [$from, $to])->sum('grand_total'),
+                'total_collection' => $visibility->scopeForUser(PartyPayment::query(), PartyPayment::class)->where('payment_type', 'payment_in')->whereBetween('payment_date', [$from, $to])->sum('total_amount'),
+                'pending_expenses' => $visibility->scopeForUser(Expense::query(), Expense::class)->where('status', 'pending_approval')->count(),
+            ];
+            $recentLogs = AuditLog::with('user')
+                ->where('company_id', $companyId)
+                ->whereBetween('created_at', [Carbon::parse($from)->startOfDay(), Carbon::parse($to)->endOfDay()])
+                ->latest('created_at')
+                ->paginate(5, ['*'], 'activity_page');
+            $companies = collect();
+        }
+
+        $stats['credit_notes_total'] = (float) $creditNoteRows->sum('total');
+        $stats['credit_notes_tax'] = (float) $creditNoteRows->sum('tax');
+        $salesDueRows = $this->dueRows($outstanding, $visibility, 'receivable', $companyId, $to);
+        $purchaseDueRows = $this->dueRows($outstanding, $visibility, 'payable', $companyId, $to);
+                $stats['sales_due'] = $salesDueRows->sum('due');
+                $stats['purchase_due'] = $purchaseDueRows->sum('due');
+        $ageingKind = $request->input('ageing_kind', 'both');
+        if (!in_array($ageingKind, ['both','receivable','payable'], true)) {
+            $ageingKind = 'both';
+        }
+                $ageingRows = $salesDueRows
+            ->merge($purchaseDueRows)
+            ->when($ageingKind !== 'both', fn($rows) => $rows->where('kind', $ageingKind))
+            ->sortByDesc('date')
+            ->values();
+        $ageingMatrix = $ageingSlabs->matrix($ageingRows);
+        $ageingSlabLabels = AgeingSlabService::SLABS;
+        $salesProducts = $this->productSummary(SalesInvoiceItem::class, 'salesInvoice', 'billing_date', $companyId, $visibility, $user, $from, $to);
+        $purchaseProducts = $this->productSummary(PurchaseBillItem::class, 'purchaseBill', 'billing_date', $companyId, $visibility, $user, $from, $to);
+        $profitRows = $this->profitRows($companyId, $visibility, $user, $from, $to, $profits);
+        $stats['total_profit'] = $profitRows->sum('profit');
+        $stats['total_profit_percent'] = $profits->profitPercentage(
+            (float) $stats['total_profit'],
+            (float) $profitRows->sum('cost')
+        );
+        $stats['total_profit_percent_on_sale'] = $profits->profitPercentageOnSale(
+            (float) $stats['total_profit'],
+            (float) $profitRows->sum('sale')
+        );
+        $stats['pending_sales'] = (float) $this->scope(PendingOrder::query(), $companyId)
+            ->whereBetween('pending_date', [$from, $to])
+            ->sum('line_total');
+        $serviceRows = $this->serviceRows($companyId, $visibility, $user, $from, $to);
+        $stats['service_amount'] = (float) $serviceRows->sum('amount');
+        $chequePaymentQuery = $this->scope(ChequeLeaf::query(), $companyId)
+            ->where('payment_done', true)
+            ->where('status', '!=', 'completed')
+            ->whereBetween('cheque_date', [$from, $to]);
+        $stats['cheque_paid'] = (float) $chequePaymentQuery->sum('amount');
+        $stats['cheque_completed'] = (float) $this->scope(ChequeLeaf::query(), $companyId)
+            ->where('status', 'completed')
+            ->whereBetween('cheque_date', [$from, $to])
+            ->sum('amount');
+        $stats['cheque_clearing_due'] = (float) $this->scope(ChequeLeaf::query(), $companyId)
+            ->where('status', 'payment_posted')
+            ->whereDate('clearance_due_date', '>=', now()->toDateString())
+            ->sum('amount');
+        $today = now()->startOfDay();
+        $mapChequeRow = function (ChequeLeaf $leaf) use ($today) {
+            $settled = (float) ($leaf->payment?->allocations?->sum('amount') ?? 0);
+            $clearance = $leaf->clearance_due_date?->copy()->startOfDay();
+
+            return [
+                'id' => $leaf->id,
+                'cheque_no' => $leaf->cheque_no,
+                'party' => $leaf->party?->display_name ?: 'Not settled yet',
+                'book' => $leaf->chequeBook?->book_no,
+                'bank' => $leaf->bankAccount?->account_name,
+                'account_number' => $leaf->bankAccount?->account_number,
+                'ifsc_code' => $leaf->bankAccount?->ifsc_code,
+                'bank_name' => $leaf->bankAccount?->bank_name,
+                'amount' => (float) $leaf->amount,
+                'settled' => $settled,
+                'due' => max(0, (float) $leaf->amount - $settled),
+                'age' => $leaf->cheque_date ? $leaf->cheque_date->diffInDays($today, false) : 0,
+                'issue_date' => $leaf->cheque_date?->format('d M Y'),
+                'clearance_date' => $leaf->clearance_due_date?->format('d M Y'),
+                'clearance_day' => $leaf->clearance_due_date?->format('l'),
+                'days_left' => $clearance ? $today->diffInDays($clearance, false) : null,
+                'validity' => $leaf->validity_months,
+                'status_raw' => $leaf->status,
+                'status' => ucfirst(str_replace('_', ' ', $leaf->status)),
+                'bills' => $leaf->payment?->allocations?->map(fn($allocation) => [
+                    'bill' => $allocation->bill_no,
+                    'amount' => (float) $allocation->amount,
+                ])->values() ?? collect(),
+                'details_url' => route('admin.cheques.details', $leaf),
+                'print_url' => route('admin.cheques.print', $leaf),
+                'status_url' => route('admin.cheques.status', $leaf),
+            ];
+        };
+        $chequeRows = $this->scope(ChequeLeaf::with(['chequeBook','bankAccount','party','payment.allocations']), $companyId)
+            ->whereBetween('cheque_date', [$from, $to])
+            ->where('status', '!=', 'completed')
+            ->orderBy('clearance_due_date')
+            ->take(50)
+            ->get()
+            ->map($mapChequeRow)
+            ->values();
+        $completedChequeRows = $this->scope(ChequeLeaf::with(['chequeBook','bankAccount','party','payment.allocations']), $companyId)
+            ->whereBetween('cheque_date', [$from, $to])
+            ->where('status', 'completed')
+            ->latest('updated_at')
+            ->take(50)
+            ->get()
+            ->map($mapChequeRow)
+            ->values();
+        $serviceTotals = [
+            'amount' => (float) $serviceRows->sum('amount'),
+            'count' => (int) $serviceRows->count(),
+            'invoices' => (int) $serviceRows->pluck('invoice_id')->unique()->count(),
+        ];
+        $salesSegments = $this->normalizeSegmentTotal(
+            $this->tradeSegments(SalesInvoiceItem::class, 'salesInvoice', SalesInvoice::class, 'billing_date', $companyId, $visibility, $user, $from, $to, 'sale'),
+            (float) ($stats['sales'] ?? 0)
+        );
+        $estimateSegments = $this->normalizeSegmentTotal(
+            $this->tradeSegments(EstimateItem::class, 'estimate', Estimate::class, 'estimate_date', $companyId, $visibility, $user, $from, $to, 'estimate'),
+            (float) ($stats['estimate_amount'] ?? 0)
+        );
+        $purchaseSegments = $this->normalizeSegmentTotal(
+            $this->tradeSegments(PurchaseBillItem::class, 'purchaseBill', PurchaseBill::class, 'billing_date', $companyId, $visibility, $user, $from, $to, 'purchase'),
+            (float) ($stats['purchases'] ?? 0)
+        );
+        $profitSegments = $this->normalizeSegmentTotal(
+            $this->profitSegments($companyId, $visibility, $user, $from, $to, $profits),
+            (float) ($stats['total_profit'] ?? 0)
+        );
+        $topSellingItemIds = $salesProducts->take(3)->pluck('item_id')->filter()->all();
+        $lowStockProducts = $this->lowStockProducts($companyId, $visibility, $user, $topSellingItemIds);
+        $monthly = $this->monthlySeries($companyId, $visibility, $user, $from, $to);
+        $mix = [
+            'Sales' => (float) ($stats['sales'] ?? 0),
+            'Purchase' => (float) ($stats['purchases'] ?? 0),
+            'Bank' => (float) ($stats['bank_balance'] ?? 0),
+            'Cash' => (float) ($stats['cash_balance'] ?? 0),
+        ];
+        $quickActions = $this->quickActions($user);
+        $collectionRows = ($user->isSuperAdmin()
+                ? $this->scope(PartyPayment::with(['party','bankAccount','allocations']), $companyId)
+                    : $visibility->scopeForUser(PartyPayment::with(['party','bankAccount','allocations']), PartyPayment::class))
+            ->where('payment_type', 'payment_in')
+            ->whereBetween('payment_date', [$from, $to])
+            ->latest('payment_date')
+            ->get()
+            ->map(fn(PartyPayment $payment) => [
+                'id' => $payment->id,
+                'party_id' => $payment->party_id,
+                'party' => $payment->party?->display_name ?: 'Walk-in / No Party',
+                'date' => $payment->payment_date?->format('Y-m-d'),
+                'date_label' => $payment->payment_date?->format('d M Y'),
+                'reference_no' => $payment->reference_no ?: '-',
+                'mode' => $payment->payment_mode ?: '-',
+                'bank' => $payment->bankAccount?->account_name ?: '-',
+                'amount' => (float) $payment->total_amount,
+                'invoice_amount' => (float) $payment->amount,
+                'discount_amount' => (float) $payment->discount_amount,
+                'outsource_expense_amount' => (float) $payment->outsource_expense_amount,
+                'description' => $payment->description ?: '-',
+                'state' => $payment->party?->state ?: '',
+                'district' => $payment->party?->district ?: '',
+                'city' => $payment->party?->city ?: '',
+                'allocations' => $payment->allocations->map(function (PartyPaymentAllocation $allocation) use ($payment) {
+                    $paymentAmount = max(0.01, (float) $payment->amount);
+                    $ratio = (float) $allocation->amount / $paymentAmount;
+
+                    return [
+                        'bill_no' => $allocation->bill_no ?: '-',
+                        'bill_type' => $allocation->bill_type ?: '-',
+                        'bill_date' => $allocation->bill_date?->format('d M Y') ?: '-',
+                        'bill_total' => (float) $allocation->bill_total,
+                        'amount' => (float) $allocation->amount,
+                        'outsource_expense_amount' => (float) $allocation->outsource_expense_amount,
+                        'received_amount' => round((float) $allocation->amount - (float) $allocation->outsource_expense_amount - (float) $payment->discount_amount * $ratio, 2),
+                    ];
+                })->values()->all(),
+            ]);
+
+        $companyName = $companyId ? Company::find($companyId)?->name : 'All Companies';
+
+        return view('admin.dashboard', compact('stats','recentLogs','companies','companiesFilter','companyId','companyName','from','to','period','monthly','mix','quickActions','salesDueRows','purchaseDueRows','ageingMatrix','ageingSlabLabels','ageingKind','salesProducts','purchaseProducts','lowStockProducts','profitRows','salesSegments','estimateSegments','purchaseSegments','profitSegments','serviceRows','serviceTotals','chequeRows','completedChequeRows','collectionRows','creditNoteRows'));
+    }
+
+    private function dateRange(Request $request): array
+    {
+        $period = $request->input('period', 'this_week');
+        $today = now();
+
+        return match ($period) {
+            'today' => [$period, $today->toDateString(), $today->toDateString()],
+            'yesterday' => [$period, $today->copy()->subDay()->toDateString(), $today->copy()->subDay()->toDateString()],
+            'week', 'this_week' => ['week', $today->copy()->startOfWeek()->toDateString(), $today->copy()->endOfWeek()->toDateString()],
+            'month', 'this_month' => ['month', $today->copy()->startOfMonth()->toDateString(), $today->copy()->endOfMonth()->toDateString()],
+            'last_month' => ['last_month', $today->copy()->subMonthNoOverflow()->startOfMonth()->toDateString(), $today->copy()->subMonthNoOverflow()->endOfMonth()->toDateString()],
+            'three_months', 'last_3_months' => ['three_months', $today->copy()->subMonths(3)->startOfDay()->toDateString(), $today->toDateString()],
+            'six_months' => [$period, $today->copy()->subMonths(6)->startOfDay()->toDateString(), $today->toDateString()],
+            'nine_months' => [$period, $today->copy()->subMonths(9)->startOfDay()->toDateString(), $today->toDateString()],
+            'this_year' => [$period, $today->copy()->startOfYear()->toDateString(), $today->toDateString()],
+            'one_year', 'year' => ['year', $today->copy()->subYear()->startOfDay()->toDateString(), $today->toDateString()],
+            'all' => [$period, '1970-01-01', $today->toDateString()],
+            'custom' => [
+                $period,
+                min(
+                    $request->date('from_date')?->toDateString() ?? $today->copy()->startOfMonth()->toDateString(),
+                    $request->date('to_date')?->toDateString() ?? $today->toDateString()
+                ),
+                max(
+                    $request->date('from_date')?->toDateString() ?? $today->copy()->startOfMonth()->toDateString(),
+                    $request->date('to_date')?->toDateString() ?? $today->toDateString()
+                ),
+            ],
+            default => ['week', $today->copy()->startOfWeek()->toDateString(), $today->copy()->endOfWeek()->toDateString()],
+        };
+    }
+
+    private function scope($query, ?int $companyId)
+    {
+        return $companyId ? $query->where('company_id', $companyId) : $query;
+    }
+
+    private function monthlySeries(?int $companyId, EntryVisibilityService $visibility, User $user, string $from, string $to): array
+{
+    $start = Carbon::parse($from)->startOfMonth();
+    $end = Carbon::parse($to)->startOfMonth();
+    if ($start->diffInMonths($end) > 11) {
+        $start = $end->copy()->subMonths(11);
+    }
+    $months = collect();
+    while ($start <= $end && $months->count() < 12) {
+        $months->push($start->copy());
+        $start->addMonth();
+    }
+    if ($months->isEmpty()) {
+        $months->push(now()->startOfMonth());
+    }
+
+    $labels = $months->map(fn($date) => $date->format('M y'))->values();
+
+    $sales = $months->map(function ($date) use ($companyId, $visibility, $user) {
+
+
+        $query = $user->isSuperAdmin()
+            ? $this->scope(SalesInvoice::query(), $companyId)
+            : $visibility->scopeForUser(
+                SalesInvoice::query(),
+                SalesInvoice::class
+            );
+
+        return (float) $query
+            ->whereYear('billing_date', $date->year)
+            ->whereMonth('billing_date', $date->month)
+            ->sum('grand_total');
+
+    })->values();
+
+    $purchases = $months->map(function ($date) use ($companyId, $visibility, $user) {
+
+        $query = $user->isSuperAdmin()
+            ? $this->scope(PurchaseBill::query(), $companyId)
+            : $visibility->scopeForUser(
+                PurchaseBill::query(),
+                PurchaseBill::class
+            );
+
+        return (float) $query
+            ->whereYear('billing_date', $date->year)
+            ->whereMonth('billing_date', $date->month)
+            ->sum('grand_total');
+
+    })->values();
+
+    return compact('labels', 'sales', 'purchases');
+}
+    private function quickActions(User $user): array
+    {
+        $actions = [
+            ['can' => 'parties.create', 'route' => 'admin.parties.create', 'icon' => 'fa-id-card', 'label' => 'Add Party'],
+            ['can' => 'sales.create', 'route' => 'admin.sales.create', 'icon' => 'fa-file-invoice-dollar', 'label' => 'New Sale'],
+            ['can' => 'estimates.create', 'route' => 'admin.estimates.create', 'icon' => 'fa-file-contract', 'label' => 'New Estimate'],
+            ['can' => 'delivery_challans.create', 'route' => 'admin.delivery-challans.create', 'icon' => 'fa-truck', 'label' => 'New Challan'],
+            ['can' => 'purchase.create', 'route' => 'admin.purchases.create', 'icon' => 'fa-shopping-cart', 'label' => 'New Purchase'],
+            ['can' => 'expenses.create', 'route' => 'admin.expenses.create', 'icon' => 'fa-receipt', 'label' => 'New Expense'],
+            ['can' => 'items.create', 'route' => 'admin.items.create', 'icon' => 'fa-box', 'label' => 'Add Item'],
+            ['can' => 'banking.manage', 'route' => 'admin.bank-transactions.create', 'icon' => 'fa-exchange-alt', 'label' => 'Bank Transfer'],
+            ['can' => 'users.create', 'route' => 'admin.users.create', 'icon' => 'fa-user-plus', 'label' => 'Add User'],
+            ['can' => 'roles.create', 'route' => 'admin.roles.create', 'icon' => 'fa-briefcase', 'label' => 'Add Role'],
+        ];
+
+        if ($user->isSuperAdmin()) {
+            array_unshift($actions, ['can' => 'companies.create', 'route' => 'admin.companies.create', 'icon' => 'fa-building', 'label' => 'Add Company']);
+        }
+
+        return collect($actions)->filter(fn($action) => $user->can($action['can']) || ($user->isSuperAdmin() && $action['route'] === 'admin.companies.create'))->values()->all();
+    }
+
+    private function dueRows(PartyOutstandingService $outstanding, EntryVisibilityService $visibility, string $kind, ?int $companyId, string $to)
+    {
+        return $outstanding->billRows($visibility, null, $to, $kind, $companyId)
+            ->map(function (array $row) {
+                $record = null;
+                if ($row['model'] !== Party::class && $row['bill_id']) {
+                    $record = $row['model']::with(['items.item'])->find($row['bill_id']);
+                }
+
+                return [
+                    'state'    => $row['state'] ?? $record?->party?->state ?? '',
+                    'district' => $row['district'] ?? $record?->party?->district ?? '',
+                    'city'     => $row['city'] ?? $record?->party?->city ?? '',
+                    'kind' => $row['kind'],
+                    'bill_id' => $row['bill_id'],
+                    'party_id' => $row['party_id'],
+                    'party' => $row['party'],
+                    'invoice' => $row['invoice'],
+                    'date' => $row['date'],
+                    'age' => $row['age'],
+                    'total' => (float) $row['total'],
+                    'returned' => (float) $row['returned'],
+                    'effective_total' => (float) $row['effective_total'],
+                    'paid' => (float) $row['paid'],
+                    'due' => (float) $row['due'],
+                    'items' => $record?->items?->map(fn($line) => [
+                        'name' => $line->item?->name ?: 'Item',
+                        'qty' => (float) $line->quantity,
+                        'unit' => $line->unit,
+                        'rate' => (float) $line->unit_price,
+                        'amount' => (float) $line->line_total,
+                    ])->values() ?? collect(),
+                    'payments' => collect($row['history'])->map(fn($allocation) => [
+                        'date' => $allocation['date'] ?? '-',
+                        'amount' => (float) ($allocation['amount'] ?? 0),
+                        'mode' => $allocation['mode'] ?? '-',
+                        'bank' => '-',
+                        'reference' => $allocation['reference_no'] ?? '-',
+                    ])->values(),
+                ];
+            })
+            ->values();
+    }
+
+    private function productSummary(string $lineModel, string $invoiceRelation, string $dateColumn, ?int $companyId, EntryVisibilityService $visibility, User $user, string $from, string $to)
+    {
+        $query = $lineModel::with(['item', $invoiceRelation])
+            ->whereHas($invoiceRelation, fn($q) => $q->whereBetween($dateColumn, [$from, $to]));
+
+        if ($user->isSuperAdmin()) {
+            $query->whereHas($invoiceRelation, fn($q) => $this->scope($q, $companyId));
+        } else {
+            $invoiceModel = $lineModel === SalesInvoiceItem::class ? SalesInvoice::class : PurchaseBill::class;
+            $visibleIds = $visibility->scopeForUser($invoiceModel::query(), $invoiceModel)->pluck('id');
+            $foreignKey = $lineModel === SalesInvoiceItem::class ? 'sales_invoice_id' : 'purchase_bill_id';
+            $query->whereIn($foreignKey, $visibleIds);
+        }
+
+        return $query->get()
+            ->groupBy('item_id')
+            ->map(function ($rows, $itemId) {
+                $first = $rows->first();
+                return [
+                    'item_id' => $itemId,
+                    'name' => $first->item?->name ?: 'Item',
+                    'qty' => (float) $rows->sum('quantity'),
+                    'amount' => (float) $rows->sum('line_total'),
+                    'unit' => $first->unit ?: $first->item?->unit,
+                ];
+            })
+            ->sortByDesc('qty')
+            ->values();
+    }
+
+    private function profitRows(?int $companyId, EntryVisibilityService $visibility, User $user, string $from, string $to, SalesProfitService $profits)
+    {
+        $query = SalesInvoice::with(['party','items.item'])
+            ->whereBetween('billing_date', [$from, $to]);
+        $query = $user->isSuperAdmin() ? $this->scope($query, $companyId) : $visibility->scopeForUser($query, SalesInvoice::class);
+
+        return $query->latest('billing_date')->get()->map(function (SalesInvoice $bill) use ($profits) {
+            $cost = $profits->invoiceCost($bill);
+            $profit = (float) $bill->grand_total - (float) $cost;
+
+            return [
+                'invoice' => $bill->invoice_no,
+                'party' => $bill->party?->display_name ?: 'Cash / Walk-in',
+                'date' => $bill->billing_date?->format('d M Y'),
+                'cost' => (float) $cost,
+                'sale' => (float) $bill->grand_total,
+                'profit' => $profit,
+                'profit_percent' => $profits->profitPercentage($profit, $cost),
+            ];
+        })->values();
+    }
+
+    private function serviceRows(?int $companyId, EntryVisibilityService $visibility, User $user, string $from, string $to)
+    {
+        $query = SalesInvoice::with(['party','items.item.bomMaterials.rawItem'])
+            ->whereBetween('billing_date', [$from, $to]);
+        $query = $user->isSuperAdmin() ? $this->scope($query, $companyId) : $visibility->scopeForUser($query, SalesInvoice::class);
+
+        return $query->get()->flatMap(function (SalesInvoice $invoice) {
+            return $invoice->items->flatMap(function (SalesInvoiceItem $line) use ($invoice) {
+                return collect($line->item?->bomMaterials ?? [])
+                    ->filter(fn($bom) => ($bom->line_type ?? 'raw_material') === 'service')
+                    ->map(function ($bom) use ($invoice, $line) {
+                        $unitPrice = (float) ($bom->unit_price ?? $bom->rawItem?->purchase_price ?? 0);
+                        $qty = (float) $line->quantity * (float) $bom->qty_per_unit;
+                        $amount = round($qty * $unitPrice, 2);
+
+                        return [
+                            'invoice_id' => $invoice->id,
+                            'invoice' => $invoice->invoice_no,
+                            'invoice_date' => $invoice->billing_date,
+                            'party' => $invoice->party?->display_name ?: 'Cash / Walk-in',
+                            'item' => $line->item?->name ?: 'Item',
+                            'service_id' => $bom->raw_item_id,
+                            'service' => $bom->rawItem?->name ?: 'Service',
+                            'qty' => $qty,
+                            'unit_price' => $unitPrice,
+                            'amount' => $amount,
+                        ];
+                    });
+            });
+        })->values();
+    }
+
+    private function tradeSegments(string $lineModel, string $invoiceRelation, string $invoiceModel, string $dateColumn, ?int $companyId, EntryVisibilityService $visibility, User $user, string $from, string $to, string $kind, ?SalesProfitService $profits = null)
+    {
+        $query = $lineModel::with(['item.productType.productCategory','item.productCategory', $invoiceRelation . '.party', $invoiceRelation . '.items'])
+            ->whereHas($invoiceRelation, fn($q) => $q->whereBetween($dateColumn, [$from, $to]));
+
+        if ($user->isSuperAdmin()) {
+            $query->whereHas($invoiceRelation, fn($q) => $this->scope($q, $companyId));
+        } else {
+            $visibleIds = $visibility->scopeForUser($invoiceModel::query(), $invoiceModel)->pluck('id');
+            $foreignKey = match ($lineModel) {
+                SalesInvoiceItem::class => 'sales_invoice_id',
+                PurchaseBillItem::class => 'purchase_bill_id',
+                EstimateItem::class => 'estimate_id',
+                default => null,
+            };
+            abort_unless($foreignKey, 500, 'Unsupported dashboard segment line model.');
+            $query->whereIn($foreignKey, $visibleIds);
+        }
+
+        $palette = ['#2563eb','#14b8a6','#f59e0b','#ec4899','#7c3aed','#22c55e','#ef4444','#0f766e'];
+        $iconMap = [
+            'gps' => 'fa-map-marker-alt',
+            'android' => 'fa-mobile-alt',
+            'led' => 'fa-lightbulb',
+            'horn' => 'fa-bullhorn',
+            'speaker' => 'fa-volume-up',
+        ];
+
+        $categoryQuery = ProductCategory::where('status', 'active')->orderBy('name');
+        if ($companyId) {
+            $categoryQuery->where('company_id', $companyId);
+        } elseif (!$user->isSuperAdmin()) {
+            $categoryQuery->where('company_id', $user->current_company_id);
+        }
+
+        $segments = $categoryQuery->get()->values()->mapWithKeys(function (ProductCategory $category, int $index) use ($palette, $iconMap) {
+            $lower = strtolower($category->name);
+            $icon = collect($iconMap)->first(fn($class, $needle) => str_contains($lower, $needle)) ?: 'fa-boxes';
+            return [(string) $category->id => [
+                'label' => $category->name,
+                'icon' => $icon,
+                'color' => $palette[$index % count($palette)],
+                'qty' => 0.0,
+                'amount' => 0.0,
+                'percent' => 0.0,
+                'items' => collect(),
+            ]];
+        });
+        $segments->put('uncategorized', [
+            'label' => 'Uncategorized',
+            'icon' => 'fa-box-open',
+            'color' => '#64748b',
+            'qty' => 0.0,
+            'amount' => 0.0,
+            'percent' => 0.0,
+            'items' => collect(),
+        ]);
+
+        $query->get()->each(function ($line) use ($segments, $invoiceRelation, $dateColumn, $kind, $profits) {
+            $bill = $line->{$invoiceRelation};
+            $category = $line->item?->productCategory ?: $line->item?->productType?->productCategory;
+            $key = $category ? (string) $category->id : 'uncategorized';
+            $row = $segments->get($key);
+            if (!$row) {
+                return;
+            }
+            $amount = $this->adjustedLineAmount($line, $bill);
+            if ($kind === 'profit') {
+                $amount -= $profits?->lineCost($line) ?? 0;
+            }
+            $amount = round($amount, 2);
+            $row['qty'] += (float) $line->quantity;
+            $row['amount'] += $amount;
+            $row['items']->push([
+                'invoice' => $bill?->invoice_no ?? $bill?->estimate_no ?? $bill?->challan_no,
+                'date' => $bill?->{$dateColumn}?->format('d M Y'),
+                'party' => $bill?->party?->display_name ?: 'Cash / Walk-in',
+                'party_id' => $bill?->party_id,
+                'state' => $bill?->party?->state ?: 'Unknown',
+                'district' => $bill?->party?->district ?: 'Unknown',
+                'city' => $bill?->party?->city ?: 'Unknown',
+                'name' => $line->item?->name ?: 'Item',
+                'product_type' => $line->item?->productType?->name ?: '-',
+                'category' => $category?->name ?: 'Uncategorized',
+                'qty' => (float) $line->quantity,
+                'amount' => $amount,
+                'kind' => $kind,
+            ]);
+            $segments->put($key, $row);
+        });
+
+        $total = max(0.01, abs((float) $segments->sum('amount')));
+
+        return $segments->map(function ($segment) use ($total) {
+            $segment['percent'] = round((abs((float) $segment['amount']) / $total) * 100, 2);
+            $segment['items'] = $segment['items']->values();
+            return $segment;
+        })->sortByDesc('amount')->values();
+    }
+
+    private function adjustedLineAmount($line, $bill): float
+    {
+        $lineTotal = (float) $line->line_total;
+        if (!$bill) {
+            return $lineTotal;
+        }
+
+        $linesTotal = max(0.01, (float) $bill->items->sum('line_total'));
+        $grandTotal = (float) $bill->grand_total;
+
+        return round($lineTotal * ($grandTotal / $linesTotal), 2);
+    }
+
+    private function profitSegments(?int $companyId, EntryVisibilityService $visibility, User $user, string $from, string $to, SalesProfitService $profits)
+    {
+        return $this->tradeSegments(SalesInvoiceItem::class, 'salesInvoice', SalesInvoice::class, 'billing_date', $companyId, $visibility, $user, $from, $to, 'profit', $profits);
+    }
+
+    private function normalizeSegmentTotal($segments, float $expectedTotal)
+    {
+        $actualTotal = round((float) $segments->sum('amount'), 2);
+        $diff = round($expectedTotal - $actualTotal, 2);
+        if (abs($diff) < 0.01 || $segments->isEmpty()) {
+            return $segments;
+        }
+
+        $targetIndex = $segments->search(fn($segment) => abs((float) $segment['amount']) > 0);
+        $targetIndex = $targetIndex === false ? 0 : $targetIndex;
+        $segments = $segments->values();
+        $target = $segments->get($targetIndex);
+        $target['amount'] = round((float) $target['amount'] + $diff, 2);
+
+        $items = collect($target['items'] ?? []);
+        if ($items->isNotEmpty()) {
+            $item = $items->first();
+            $item['amount'] = round((float) ($item['amount'] ?? 0) + $diff, 2);
+            $items->put(0, $item);
+            $target['items'] = $items->values();
+        }
+
+        $segments->put($targetIndex, $target);
+        $total = max(0.01, abs((float) $segments->sum('amount')));
+
+        return $segments->map(function ($segment) use ($total) {
+            $segment['percent'] = round((abs((float) $segment['amount']) / $total) * 100, 2);
+            return $segment;
+        })->sortByDesc('amount')->values();
+    }
+
+    private function lowStockProducts(?int $companyId, EntryVisibilityService $visibility, User $user, array $topSellingItemIds)
+    {
+        $query = Item::with('productType')
+            ->whereNotNull('low_stock_qty')
+            ->whereColumn('current_stock', '<=', 'low_stock_qty')
+            ->orderBy('current_stock');
+        $query = $user->isSuperAdmin() ? $this->scope($query, $companyId) : $visibility->scopeForUser($query, Item::class);
+
+        return $query->take(10)->get()->map(fn(Item $item) => [
+            'id' => $item->id,
+            'name' => $item->name,
+            'stock' => (float) $item->current_stock,
+            'low' => (float) $item->low_stock_qty,
+            'unit' => $item->unit,
+            'most_selling' => in_array($item->id, $topSellingItemIds, true),
+        ]);
+    }
+}

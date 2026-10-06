@@ -1,0 +1,18 @@
+@include('admin.partials.print-document', [
+    'title' => 'Purchase Bill',
+    'docNo' => $bill->invoice_no,
+    'docDate' => $bill->billing_date,
+    'status' => $bill->status,
+    'party' => $bill->party,
+    'lines' => $bill->items,
+    'billingAddress' => $bill->billing_address,
+    'shippingAddress' => $bill->shipping_address,
+    'subtotal' => $bill->subtotal,
+    'discount' => $bill->discount_amount,
+    'tax' => $bill->tax_amount,
+    'grandTotal' => $bill->grand_total,
+    'terms' => $bill->terms ?: ($defaultTerms?->content ?? ''),
+    'company' => $company ?? $bill->company,
+    'bankAccount' => $bankAccount ?? null,
+    'accent' => '#0f766e',
+])

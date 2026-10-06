@@ -1,0 +1,1380 @@
+@extends('layouts.admin')
+@section('title','Sales Target Intelligence')
+@section('content')
+<style>
+:root{
+    --stx-violet:#7C3AED;
+    --stx-indigo:#6366F1;
+    --stx-teal:#0f766e;
+    --stx-mint:#10b981;
+    --stx-amber:#f59e0b;
+    --stx-rose:#ef4444;
+    --stx-ink:#0f172a;
+    --stx-muted:#64748b;
+    --stx-card-radius:20px;
+}
+#stx-wrap{font-family:'Inter','Outfit',sans-serif;color:var(--stx-ink)}
+#stx-wrap *{box-sizing:border-box}
+
+.stx-hero{
+    position:relative;overflow:hidden;border-radius:26px;padding:36px 32px;
+    background:linear-gradient(135deg,var(--stx-violet) 0%,var(--stx-indigo) 55%,var(--stx-teal) 100%);
+    color:#fff;box-shadow:0 24px 60px rgba(99,102,241,.28);margin-bottom:22px;
+    animation:stxFadeUp .6s ease both;
+}
+.stx-hero .stx-blob{position:absolute;border-radius:50%;filter:blur(4px);opacity:.18;background:#fff;animation:stxFloat 9s ease-in-out infinite}
+.stx-hero .stx-blob-1{width:220px;height:220px;top:-70px;right:-40px;animation-delay:0s}
+.stx-hero .stx-blob-2{width:140px;height:140px;bottom:-50px;right:180px;animation-delay:2s}
+.stx-hero .stx-blob-3{width:90px;height:90px;top:40px;right:260px;animation-delay:4s}
+@keyframes stxFloat{0%,100%{transform:translateY(0) translateX(0)}50%{transform:translateY(-18px) translateX(10px)}}
+.stx-hero-badge{display:inline-flex;align-items:center;gap:8px;background:rgba(255,255,255,.16);backdrop-filter:blur(6px);
+    border:1px solid rgba(255,255,255,.28);padding:7px 16px;border-radius:999px;font-size:12px;font-weight:700;letter-spacing:.06em}
+.stx-hero-badge .stx-dot{width:7px;height:7px;border-radius:50%;background:#5eead4;animation:stxPulse 1.6s infinite}
+@keyframes stxPulse{0%{box-shadow:0 0 0 0 rgba(94,234,212,.6)}70%{box-shadow:0 0 0 8px rgba(94,234,212,0)}100%{box-shadow:0 0 0 0 rgba(94,234,212,0)}}
+.stx-hero h1{font-family:'Outfit',sans-serif;font-weight:800;font-size:32px;margin:14px 0 6px}
+.stx-target-orb{width:78px;height:78px;border-radius:22px;background:rgba(255,255,255,.14);backdrop-filter:blur(6px);
+    border:1px solid rgba(255,255,255,.25);display:grid;place-items:center;font-size:32px;position:relative;z-index:2;
+    animation:stxSpinSlow 12s linear infinite}
+@keyframes stxSpinSlow{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+
+.stx-filter-card{border:0;border-radius:var(--stx-card-radius);box-shadow:0 10px 30px rgba(15,23,42,.06);margin-bottom:22px;
+    animation:stxFadeUp .6s ease .08s both}
+.stx-pill{border:1.5px solid #e5e7eb;border-radius:999px;padding:8px 16px;margin:3px;color:var(--stx-muted);background:#fff;
+    text-decoration:none;display:inline-block;font-weight:600;font-size:13px;transition:all .25s ease}
+.stx-pill:hover{border-color:var(--stx-violet);color:var(--stx-violet);transform:translateY(-1px)}
+.stx-pill.active{background:linear-gradient(135deg,var(--stx-violet),var(--stx-indigo));color:#fff;border-color:transparent;
+    box-shadow:0 8px 18px rgba(124,58,237,.28)}
+.stx-input-label{font-size:11px;font-weight:700;letter-spacing:.05em;color:var(--stx-muted);text-transform:uppercase;margin-bottom:6px}
+#stx-wrap .form-control{border-radius:12px;border:1.5px solid #e5e7eb;padding:10px 14px;transition:.2s}
+#stx-wrap .form-control:focus{border-color:var(--stx-violet);box-shadow:0 0 0 3px rgba(124,58,237,.12)}
+.stx-btn-grad{background:linear-gradient(135deg,var(--stx-violet),var(--stx-indigo));border:none;color:#fff;border-radius:12px;
+    padding:10px 22px;font-weight:700;box-shadow:0 10px 22px rgba(124,58,237,.25);transition:transform .2s}
+.stx-btn-grad:hover{transform:translateY(-2px);color:#fff}
+.stx-btn-soft{border-radius:12px;font-weight:700;padding:10px 18px;transition:transform .2s}
+.stx-btn-soft:hover{transform:translateY(-2px)}
+
+.stx-kpi{border:0;border-radius:var(--stx-card-radius);box-shadow:0 10px 26px rgba(15,23,42,.06);overflow:hidden;position:relative;
+    animation:stxFadeUp .6s ease both}
+.stx-kpi:nth-child(1){animation-delay:.12s}.stx-kpi:nth-child(2){animation-delay:.18s}
+.stx-kpi:nth-child(3){animation-delay:.24s}.stx-kpi:nth-child(4){animation-delay:.30s}
+.stx-kpi .card-body{padding:22px}
+.stx-kpi-icon{width:50px;height:50px;border-radius:16px;display:grid;place-items:center;font-size:20px;flex-shrink:0}
+.stx-kpi-label{font-size:11px;font-weight:700;letter-spacing:.06em;color:var(--stx-muted);text-transform:uppercase}
+.stx-kpi-value{font-family:'Outfit',sans-serif;font-weight:800;font-size:26px;margin-top:4px}
+.stx-kpi-bar{height:4px;width:100%;background:#f1f5f9;border-radius:4px;margin-top:14px;overflow:hidden}
+.stx-kpi-bar span{display:block;height:100%;border-radius:4px;width:0;transition:width 1.1s cubic-bezier(.2,.8,.2,1)}
+.stx-kpi-clickable{cursor:pointer;transition:transform .2s,box-shadow .2s}
+.stx-kpi-clickable:hover{transform:translateY(-3px);box-shadow:0 16px 34px rgba(124,58,237,.18)}
+.stx-kpi-clickable .stx-kpi-hint{font-size:11px;color:var(--stx-violet);font-weight:700;margin-top:6px;opacity:.85}
+
+.stx-ring-wrap{position:relative;width:56px;height:56px}
+.stx-ring-wrap svg{transform:rotate(-90deg)}
+.stx-ring-bg{stroke:#f1f5f9}
+.stx-ring-fg{stroke:var(--stx-violet);stroke-linecap:round;transition:stroke-dashoffset 1.2s cubic-bezier(.2,.8,.2,1)}
+.stx-ring-txt{position:absolute;inset:0;display:grid;place-items:center;font-size:11px;font-weight:800}
+
+.stx-chart-card{border:0;border-radius:var(--stx-card-radius);box-shadow:0 10px 30px rgba(15,23,42,.06);
+    animation:stxFadeUp .6s ease .34s both}
+.stx-tabbar{display:inline-flex;background:#f1f5f9;border-radius:14px;padding:5px;gap:2px;flex-wrap:wrap}
+.stx-tab{border:0;background:transparent;color:var(--stx-muted);padding:9px 16px;border-radius:11px;font-weight:700;
+    font-size:13px;display:inline-flex;align-items:center;gap:7px;transition:all .25s ease}
+.stx-tab:hover{color:var(--stx-violet)}
+.stx-tab.active{background:#fff;color:var(--stx-violet);box-shadow:0 4px 12px rgba(15,23,42,.08)}
+.stx-pane{display:none;animation:stxFadeIn .35s ease both}
+.stx-pane.active{display:block}
+@keyframes stxFadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+@keyframes stxFadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+
+.stx-table thead th{border:0;background:#f8fafc;color:var(--stx-muted);font-size:11px;text-transform:uppercase;
+    letter-spacing:.05em;font-weight:700;padding:14px 16px}
+.stx-table tbody tr{transition:background .2s}
+.stx-table tbody tr:hover{background:#f5f3ff}
+.stx-table td{padding:14px 16px;vertical-align:middle;border-top:1px solid #f1f5f9}
+.stx-cat-chip{display:inline-flex;align-items:center;gap:8px;font-weight:700}
+.stx-cat-dot{width:9px;height:9px;border-radius:50%}
+.stx-badge-ach{border-radius:999px;padding:5px 12px;font-weight:800;font-size:12px}
+.stx-badge-ach.good{background:#dcfce7;color:#15803d}
+.stx-badge-ach.warn{background:#fef3c7;color:#b45309}
+.stx-mini-bar{height:6px;width:70px;background:#f1f5f9;border-radius:4px;display:inline-block;overflow:hidden;vertical-align:middle;margin-left:8px}
+.stx-mini-bar span{display:block;height:100%;border-radius:4px}
+
+.stx-empty{text-align:center;padding:60px 20px;color:var(--stx-muted)}
+.stx-empty .stx-empty-emoji{font-size:48px;margin-bottom:12px;display:block;animation:stxFloat 3s ease-in-out infinite}
+
+@media(max-width:768px){.stx-hero h1{font-size:24px}.stx-target-orb{display:none}}
+
+.stx-chart-box{position:relative;height:300px;width:100%}
+.stx-pie-wrap{display:flex;gap:28px;align-items:center;flex-wrap:wrap}
+.stx-pie-canvas-col{position:relative;height:250px;width:250px;flex:0 0 250px;
+    filter:drop-shadow(0 16px 22px rgba(124,58,237,.30)) drop-shadow(0 2px 6px rgba(15,23,42,.15))}
+.stx-pie-legend{flex:1;min-width:230px;max-height:270px;overflow-y:auto;padding-right:6px}
+.stx-pie-legend-item{display:flex;align-items:center;justify-content:space-between;padding:9px 2px;
+    border-bottom:1px solid #f1f5f9;font-size:13px}
+.stx-pie-legend-item:last-child{border-bottom:0}
+.stx-pie-legend-left{display:flex;align-items:center;gap:10px;font-weight:700}
+.stx-pie-dot{width:11px;height:11px;border-radius:50%;flex-shrink:0;box-shadow:0 0 0 3px rgba(0,0,0,.03)}
+.stx-pie-legend-pct{font-weight:800;color:var(--stx-violet);text-align:right;white-space:nowrap;flex-shrink:0;margin-left:10px}
+.stx-pie-center-label{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:none}
+.stx-pie-center-label b{font-family:'Outfit',sans-serif;font-size:22px;color:var(--stx-ink);line-height:1.1}
+.stx-pie-center-label span{font-size:10px;color:var(--stx-muted);text-transform:uppercase;letter-spacing:.05em;text-align:center;max-width:110px}
+@media(max-width:576px){.stx-pie-canvas-col{width:210px;height:210px;flex:0 0 210px}}
+
+.stx-progress-track{height:10px;border-radius:6px;background:#f1f5f9;overflow:hidden}
+.stx-progress-fill{display:block;height:100%;border-radius:6px;width:0;transition:width 1.1s cubic-bezier(.2,.8,.2,1)}
+
+.stx-cat-clickable{cursor:pointer;border-radius:14px;padding:10px 12px;margin:0 -12px 6px;transition:background .2s,transform .2s}
+.stx-cat-clickable:hover{background:#f5f3ff;transform:translateY(-1px)}
+.stx-cat-clickable .stx-cat-hint{font-size:11px;color:var(--stx-violet);font-weight:700;opacity:0;transition:opacity .2s}
+.stx-cat-clickable:hover .stx-cat-hint{opacity:1}
+
+#stxModalCategoryFilter,#stxModalStateFilter,#stxModalCityFilter{border-radius:12px;border:1.5px solid #e5e7eb;padding:9px 12px}
+.stx-modal-toolbar{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+.stx-modal-toolbar .stx-input-label{margin-bottom:6px}
+.stx-modal-filters{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
+.stx-modal-summary{display:flex;gap:10px;flex-wrap:wrap}
+.stx-modal-summary .stx-chip{background:#f1f5f9;border-radius:10px;padding:6px 12px;font-size:12px;font-weight:700;color:var(--stx-muted)}
+.stx-modal-summary .stx-chip b{color:var(--stx-ink);font-family:'Outfit',sans-serif;font-size:14px}
+.stx-party-list{display:flex;flex-direction:column;gap:14px}
+.stx-party-card{background:#f8fafc;border-radius:16px;padding:18px 20px;box-shadow:0 6px 18px rgba(15,23,42,.06);
+    animation:stxFadeIn .35s ease both}
+.stx-party-header{margin-bottom:12px}
+.stx-party-title{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.stx-party-badge{border-radius:999px;padding:5px 14px;font-weight:800;font-size:13px}
+.stx-party-body-row{display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap}
+.stx-party-pie-col{flex:0 0 96px;display:flex;align-items:center;justify-content:center;
+    filter:drop-shadow(0 8px 14px rgba(124,58,237,.22))}
+.stx-party-body{flex:1;min-width:230px;display:flex;flex-direction:column;gap:10px}
+.stx-party-category{background:#fff;border-radius:12px;padding:11px 14px;box-shadow:0 2px 8px rgba(15,23,42,.05)}
+.stx-cat-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:7px}
+.stx-cat-name{font-weight:700;font-size:13px;padding-left:9px}
+.stx-cat-achievement{border-radius:999px;padding:3px 10px;font-weight:800;font-size:11px}
+.stx-cat-progress{height:6px;border-radius:4px;background:#f1f5f9;overflow:hidden;margin-bottom:7px}
+.stx-cat-bar{display:block;height:100%;border-radius:4px;transition:width .8s cubic-bezier(.2,.8,.2,1)}
+.stx-cat-details{display:flex;justify-content:space-between}
+.stx-cat-details small{color:var(--stx-muted);font-size:11px}
+
+.stx-icon-btn{background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.3);color:#fff;border-radius:10px;
+    width:36px;height:36px;display:inline-flex;align-items:center;justify-content:center;margin-left:8px;transition:.2s;cursor:pointer}
+.stx-icon-btn:hover{background:rgba(255,255,255,.32);color:#fff}
+.stx-modal-fullscreen{max-width:100vw!important;width:100vw;height:100vh;margin:0}
+.stx-modal-fullscreen .modal-content{height:100vh;border-radius:0!important}
+.stx-cat-chart-box{position:relative;height:320px;width:100%;margin-bottom:22px}
+.stx-cat-modal-loading{text-align:center;padding:50px 20px}
+.stx-cat-party-row {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 15px 18px;
+    border-bottom: 1px solid #eee;
+}
+.stx-cat-party-name {
+    width: 100%;
+    font-size: 15px;
+    color: #1f2937;
+}
+.stx-cat-party-name strong { display: block; font-weight: 700; }
+.stx-cat-party-name small{ display:block; font-weight:500; color:#64748b; font-size:11px; margin-top:2px; }
+.stx-cat-party-bar-wrap { width: 100%; }
+.stx-progress-track { width: 100%; height: 12px; background: #f1f5f9; border-radius: 20px; overflow: hidden; }
+.stx-progress-fill { height: 100%; border-radius: 20px; transition: width .8s ease; }
+.stx-cat-party-nums { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; font-size: 13px; color: #64748b; }
+.stx-cat-party-nums b { color: #1f2937; }
+.stx-badge-ach { margin-left: auto; }
+</style>
+
+<div id="stx-wrap">
+@php
+    $stxPalette = ['#7C3AED','#0ea5e9','#f59e0b','#10b981','#ef4444','#ec4899','#2563eb'];
+    $stxMonthOptions = [];
+    $stxCursor = \Carbon\Carbon::parse($filters['from'])->startOfMonth();
+    $stxEndCursor = \Carbon\Carbon::parse($filters['to'])->startOfMonth();
+    while ($stxCursor->lte($stxEndCursor)) {
+        $stxMonthOptions[] = ['value' => $stxCursor->format('Y-m'), 'label' => $stxCursor->format('M Y')];
+        $stxCursor->addMonth();
+    }
+@endphp
+
+    {{-- ===================== HERO ===================== --}}
+    <div class="stx-hero">
+        <div class="stx-blob stx-blob-1"></div>
+        <div class="stx-blob stx-blob-2"></div>
+        <div class="stx-blob stx-blob-3"></div>
+        <div class="d-flex justify-content-between align-items-start" style="position:relative;z-index:2">
+            <div>
+                <span class="stx-hero-badge"><span class="stx-dot"></span> SALES TARGET INTELLIGENCE</span>
+                <h1>🎯 Target vs Actual — Ek nazar mein sab kuch</h1>
+                <p class="mb-0" style="opacity:.85">
+                    {{ date('d M Y', strtotime($filters['from'])) }} &mdash; {{ date('d M Y', strtotime($filters['to'])) }}
+                    &nbsp;·&nbsp; Category performance ka poora overview
+                </p>
+            </div>
+            <div class="stx-target-orb">🎯</div>
+        </div>
+    </div>
+
+    {{-- ===================== FILTERS ===================== --}}
+    <div class="card stx-filter-card">
+        <div class="card-body p-4">
+            <div class="mb-3">
+                <strong class="mr-2" style="color:var(--stx-muted);font-size:13px">⚡ Quick view:</strong>
+                @foreach(['last_month'=>'Last Month','this_month'=>'This Month','last_3_months'=>'Last 3 Months','last_6_months'=>'Last 6 Months','last_9_months'=>'Last 9 Months','this_year'=>'This Year'] as $key=>$label)
+                    <a class="stx-pill {{ $filters['quick_period']===$key?'active':'' }}"
+                       href="{{ route('admin.sales-targets.report',array_merge(request()->query(),['quick_period'=>$key])) }}">{{ $label }}</a>
+                @endforeach
+                <a class="stx-pill" href="{{ route('admin.sales-targets.report') }}">🗓 Custom</a>
+            </div>
+            <form id="stxFilterForm">
+                <div class="row align-items-end">
+                    <div class="col-md-3 form-group mb-md-0">
+                        <div class="stx-input-label">From</div>
+                        <input type="date" name="from_date" class="form-control" value="{{ $filters['from'] }}">
+                    </div>
+                    <div class="col-md-3 form-group mb-md-0">
+                        <div class="stx-input-label">To</div>
+                        <input type="date" name="to_date" class="form-control" value="{{ $filters['to'] }}">
+                    </div>
+                    <div class="col-md-3 form-group mb-md-0">
+                        <div class="stx-input-label">Party</div>
+                        <select name="party_id" class="form-control select2">
+                            <option value="">All Parties</option>
+                            @foreach($parties as $party)
+                                <option value="{{ $party->id }}" @selected($filters['party_id']==$party->id)>{{ $party->display_name }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div class="col-md-3 form-group mb-md-0">
+                        <div class="stx-input-label">Product Category</div>
+                        <select name="product_category_id" class="form-control select2">
+                            <option value="">All Categories</option>
+                            @foreach($categories as $category)
+                                <option value="{{ $category->id }}" @selected($filters['product_category_id']==$category->id)>{{ $category->name }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                </div>
+                <div class="row align-items-end mt-3">
+                    <div class="col-md-3 form-group mb-md-0">
+                        <div class="stx-input-label">📍 State</div>
+                        <select name="party_state" class="form-control select2">
+                            <option value="">All States</option>
+                            @foreach($states as $state)
+                                <option value="{{ $state }}" @selected($filters['party_state']==$state)>{{ $state }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div class="col-md-3 form-group mb-md-0">
+                        <div class="stx-input-label">🏙️ City</div>
+                        <select name="party_city" class="form-control select2">
+                            <option value="">All Cities</option>
+                            @foreach($cities as $city)
+                                <option value="{{ $city }}" @selected($filters['party_city']==$city)>{{ $city }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                </div>
+                <div class="mt-3">
+                    <button type="submit" class="stx-btn-grad"><i class="fas fa-filter mr-1"></i> Filter Apply Karein</button>
+                    <a class="btn btn-outline-success stx-btn-soft ml-2" id="stxExportExcel"
+                       href="{{ route('admin.sales-targets.report.export',request()->query()) }}">
+                        <i class="fas fa-file-excel mr-1"></i> Excel</a>
+                    <a class="btn btn-outline-secondary stx-btn-soft ml-2" id="stxExportPdf" target="_blank"
+                       href="{{ route('admin.sales-targets.report.print',request()->query()) }}">
+                        <i class="fas fa-file-pdf mr-1"></i> PDF</a>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    {{-- ===================== KPI CARDS (4 now) ===================== --}}
+    <div class="row">
+        <div class="col-lg-3 col-md-6 mb-3">
+            <div class="card stx-kpi stx-kpi-clickable" data-toggle="modal" data-target="#stxAmountBreakdownModal" data-source="target">
+                <div class="card-body d-flex justify-content-between align-items-start">
+                    <div>
+                        <div class="stx-kpi-label">Total Target <small>(₹ based)</small></div>
+                        <div class="stx-kpi-value stx-count" data-target="{{ $summary['target'] }}">0</div>
+                        <div class="stx-kpi-bar"><span style="background:linear-gradient(90deg,var(--stx-violet),var(--stx-indigo));width:100%"></span></div>
+                        <div class="stx-kpi-hint"><i class="fas fa-search mr-1"></i>Party-wise dekhein</div>
+                    </div>
+                    <span class="stx-kpi-icon" style="background:#ede9fe;color:var(--stx-violet)">🎯</span>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-3 col-md-6 mb-3">
+            <div class="card stx-kpi stx-kpi-clickable" data-toggle="modal" data-target="#stxAmountBreakdownModal" data-source="actual">
+                <div class="card-body d-flex justify-content-between align-items-start">
+                    <div>
+                        <div class="stx-kpi-label">Actual Amount</div>
+                        <div class="stx-kpi-value">₹<span class="stx-count" data-target="{{ $summary['amount'] }}">0</span></div>
+                        <div class="stx-kpi-bar"><span style="background:linear-gradient(90deg,#10b981,#5eead4);width:100%"></span></div>
+                        <div class="stx-kpi-hint"><i class="fas fa-search mr-1"></i>Party-wise dekhein</div>
+                    </div>
+                    <span class="stx-kpi-icon" style="background:#d1fae5;color:var(--stx-mint)">💰</span>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-3 col-md-6 mb-3">
+            <div class="card stx-kpi stx-kpi-clickable" data-toggle="modal" data-target="#stxUncoveredSalesModal">
+                <div class="card-body d-flex justify-content-between align-items-start">
+                    <div>
+                        <div class="stx-kpi-label">Total Sales</div>
+                        <div class="stx-kpi-value">₹<span class="stx-count" data-target="{{ $summary['total_sales'] }}">0</span></div>
+                        <div class="stx-kpi-bar"><span style="background:linear-gradient(90deg,#0ea5e9,#38bdf8);width:100%"></span></div>
+                        <small style="color:var(--stx-muted)">Poora business sale (dashboard jaisa), filters ke hisab se</small>
+                        <div class="stx-kpi-hint"><i class="fas fa-search mr-1"></i>Unmapped products dekhein</div>
+                    </div>
+                    <span class="stx-kpi-icon" style="background:#e0f2fe;color:#0ea5e9">📈</span>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-3 col-md-6 mb-3">
+            <div class="card stx-kpi">
+                <div class="card-body d-flex justify-content-between align-items-center">
+                    <div>
+                        <div class="stx-kpi-label">Target Achieved</div>
+                        <div class="stx-kpi-value">{{ number_format($summary['achievement'],1) }}%</div>
+                        <small style="color:var(--stx-muted)">Actual Amount se</small>
+                        <div style="margin-top:6px;font-size:12px;color:var(--stx-muted)">
+                            Total Sales se: <b style="color:var(--stx-ink)">{{ number_format($summary['achievement_on_total_sales'],1) }}%</b>
+                        </div>
+                    </div>
+                    <div class="stx-ring-wrap">
+                        <svg width="56" height="56" viewBox="0 0 56 56">
+                            <circle class="stx-ring-bg" cx="28" cy="28" r="24" fill="none" stroke-width="6"></circle>
+                            <circle class="stx-ring-fg" id="stxAchRing" cx="28" cy="28" r="24" fill="none" stroke-width="6"
+                                    stroke-dasharray="150.8" stroke-dashoffset="150.8"
+                                    data-pct="{{ number_format($summary['achievement'],1) }}"></circle>
+                        </svg>
+                        <div class="stx-ring-txt">🔥</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {{-- ===================== CHARTS + TABLE ===================== --}}
+    <div class="card stx-chart-card">
+        <div class="card-header bg-white border-0 pt-3 pb-2">
+            <div class="stx-tabbar">
+                <button class="stx-tab active" data-pane="stxPiePane">🍩 Pie</button>
+                <button class="stx-tab" data-pane="stxCandlePane">📊 Bars</button>
+                <button class="stx-tab" data-pane="stxWavePane">🌊 Wave</button>
+                <button class="stx-tab" data-pane="stxRadarPane">🕸 Radar</button>
+                <button class="stx-tab" data-pane="stxContentPane">📋 Table</button>
+            </div>
+        </div>
+        <div class="card-body">
+            <div id="stxPiePane" class="stx-pane active">
+                <div class="stx-pie-wrap">
+                    <div class="stx-pie-canvas-col">
+                        <canvas id="stxPieChart"></canvas>
+                        <div class="stx-pie-center-label"><b id="stxPieCenterVal">0%</b><span id="stxPieCenterLabel">Top Category</span></div>
+                    </div>
+                    <div class="stx-pie-legend" id="stxPieLegend"></div>
+                </div>
+            </div>
+            <div id="stxCandlePane" class="stx-pane"><div class="stx-chart-box"><canvas id="stxCandleChart"></canvas></div></div>
+            <div id="stxWavePane" class="stx-pane"><div class="stx-chart-box"><canvas id="stxWaveChart"></canvas></div></div>
+            <div id="stxRadarPane" class="stx-pane"><div class="stx-chart-box"><canvas id="stxRadarChart"></canvas></div></div>
+            <div id="stxContentPane" class="stx-pane">
+                @if($rows->count())
+                <div class="table-responsive">
+                    <table class="table stx-table" id="stxReportTable">
+                        <thead>
+                            <tr>
+                                <th>Party</th><th>Category</th><th>Period</th><th>Target</th>
+                                <th>Actual</th><th>Achievement</th><th>Amount</th><th>Qty</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach($rows as $i => $row)
+                            <tr>
+                                <td><strong>{{ $row['party'] }}</strong></td>
+                                <td>
+                                    <span class="stx-cat-chip">
+                                        <span class="stx-cat-dot" style="background:{{ $stxPalette[$i % count($stxPalette)] }}"></span>
+                                        {{ $row['category'] }}
+                                    </span>
+                                </td>
+                                <td>{{ $row['period'] }}<br><small class="text-muted">{{ $row['starts_on'] }} - {{ $row['ends_on'] }}</small></td>
+                                <td>{{ number_format($row['target'],2) }} {{ $row['target_type'] }}</td>
+                                <td>{{ number_format($row['actual'],2) }}</td>
+                                <td>
+                                    <span class="stx-badge-ach {{ $row['achievement'] >= 100 ? 'good':'warn' }}">
+                                        {{ number_format($row['achievement'],1) }}%
+                                    </span>
+                                    <span class="stx-mini-bar">
+                                        <span style="width:{{ min($row['achievement'],100) }}%;background:{{ $row['achievement']>=100?'#10b981':'#f59e0b' }}"></span>
+                                    </span>
+                                </td>
+                                <td>₹ {{ number_format($row['actual_amount'],2) }}</td>
+                                <td>{{ number_format($row['actual_quantity'],2) }}</td>
+                            </tr>
+                            @endforeach
+                        </tbody>
+                    </table>
+                </div>
+                @else
+                <div class="stx-empty">
+                    <span class="stx-empty-emoji">🔍</span>
+                    <h5>Koi target nahi mila</h5>
+                    <p class="mb-0">Apne filters change karke phir try karein.</p>
+                </div>
+                @endif
+            </div>
+        </div>
+    </div>
+
+    {{-- ===================== CATEGORY-WISE PROGRESS ===================== --}}
+    <div class="card stx-chart-card mt-3">
+        <div class="card-header bg-white border-0 pt-3 pb-2">
+            <h5 class="mb-0" @if(!$selectedPartyName) style="cursor:pointer;color:var(--stx-violet)" data-toggle="modal" data-target="#stxPartyProgressModal" title="Click to see party-wise details" @endif>
+                🎯 @if($selectedPartyName) {{ $selectedPartyName }} ka Category-wise Progress @else Overall Category-wise Progress (Sabhi Parties) @endif
+                @if(!$selectedPartyName)<i class="fas fa-external-link-alt ml-2" style="font-size:12px;opacity:.7"></i>@endif
+            </h5>
+            <small class="text-muted">Target vs Actual, selected date range ke liye &middot; kisi bhi category par click karein uske parties dekhne ke liye</small>
+        </div>
+        <div class="card-body">
+            @if($progress->count())
+            <div class="stx-progress-list">
+                @foreach($progress as $p)
+                @php
+                    $unitSuffix = $p['target_type']==='amount' ? '₹' : ($p['target_type']==='quantity' ? '' : '%');
+                    $pct = min($p['achievement'], 100);
+                @endphp
+                <div class="stx-progress-item mb-3 stx-cat-clickable"
+                     data-category-id="{{ $p['category_id'] }}"
+                     data-category-name="{{ $p['category'] }}"
+                     title="Click to see party-wise breakdown for {{ $p['category'] }}">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <span class="stx-cat-chip">
+                            <span class="stx-cat-dot" style="background:{{ $stxPalette[$loop->index % count($stxPalette)] }}"></span>
+                            {{ $p['category'] }}
+                            <small class="text-muted ml-1">({{ $p['parties_count'] }} {{ $p['parties_count']==1 ? 'party' : 'parties' }})</small>
+                            <span class="stx-cat-hint"><i class="fas fa-search mr-1"></i>Details</span>
+                        </span>
+                        <span class="stx-badge-ach {{ $p['achievement']>=100?'good':'warn' }}">{{ number_format($p['achievement'],1) }}%</span>
+                    </div>
+                    <div class="stx-progress-track">
+                        <div class="stx-progress-fill" data-pct="{{ $pct }}" style="background:{{ $p['achievement']>=100 ? 'linear-gradient(90deg,#10b981,#5eead4)' : 'linear-gradient(90deg,#7C3AED,#6366F1)' }}"></div>
+                    </div>
+                    <div class="d-flex justify-content-between mt-1">
+                        <small class="text-muted">Target: {{ $unitSuffix }} {{ number_format($p['target'],2) }}</small>
+                        <small class="text-muted">Complete: {{ $unitSuffix }} {{ number_format($p['actual'],2) }}</small>
+                    </div>
+                </div>
+                @endforeach
+            </div>
+            @else
+            <div class="stx-empty">
+                <span class="stx-empty-emoji">🎯</span>
+                <h5>Abhi koi target progress nahi hai</h5>
+                <p class="mb-0">Filters change karke phir dekhein.</p>
+            </div>
+            @endif
+        </div>
+    </div>
+
+    {{-- ===================== TOTAL SALES DIAGNOSIS MODAL ===================== --}}
+    <div class="modal fade" id="stxUncoveredSalesModal" tabindex="-1" role="dialog" aria-hidden="true">
+        <div class="modal-dialog modal-xl" role="document">
+            <div class="modal-content" style="border-radius:var(--stx-card-radius);border:0;box-shadow:0 24px 60px rgba(14,165,233,.24)">
+                <div class="modal-header" style="border-bottom:1px solid #f1f5f9;background:linear-gradient(135deg,#0ea5e9,#6366F1);color:#fff;border-radius:var(--stx-card-radius) var(--stx-card-radius) 0 0">
+                    <h5 class="modal-title" style="font-weight:800"><i class="fas fa-search-dollar mr-2"></i> Total Sales Difference Report</h5>
+                    <button type="button" class="close text-white" data-dismiss="modal" aria-label="Close" style="opacity:.9"><span aria-hidden="true">&times;</span></button>
+                </div>
+                <div class="modal-body">
+                    <div class="stx-modal-summary mb-3">
+                        <span class="stx-chip">Actual Amount: <b>Rs {{ number_format($summary['amount'],2) }}</b></span>
+                        <span class="stx-chip">Total Sales: <b>Rs {{ number_format($summary['total_sales'],2) }}</b></span>
+                        <span class="stx-chip">Difference: <b>Rs {{ number_format($summary['total_sales'] - $summary['amount'],2) }}</b></span>
+                        <span class="stx-chip">Unmapped Items: <b>{{ $uncoveredSummary['items_count'] }}</b></span>
+                        <span class="stx-chip">Unmapped Amount: <b>Rs {{ number_format($uncoveredSummary['amount'],2) }}</b></span>
+                        @if(abs($uncoveredSummary['invoice_adjustment']) > 0.01)
+                            <span class="stx-chip">Invoice Adjustment/Tax: <b>Rs {{ number_format($uncoveredSummary['invoice_adjustment'],2) }}</b></span>
+                        @endif
+                    </div>
+
+                    @if(count($uncoveredSales))
+                        <div class="table-responsive" style="max-height:560px;overflow:auto">
+                            <table class="table stx-table mb-0" id="stxUncoveredSalesTable">
+                                <thead>
+                                    <tr>
+                                        <th>Date</th>
+                                        <th>Bill</th>
+                                        <th>Party</th>
+                                        <th>Product</th>
+                                        <th>Category</th>
+                                        <th>Qty</th>
+                                        <th class="text-right">Amount</th>
+                                        <th>Reason</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach($uncoveredSales as $sale)
+                                        <tr>
+                                            <td>{{ $sale['billing_date'] }}</td>
+                                            <td><a href="{{ $sale['invoice_url'] }}" target="_blank">{{ $sale['invoice_no'] ?: '#'.$sale['invoice_id'] }}</a></td>
+                                            <td>{{ $sale['party'] }}</td>
+                                            <td>
+                                                <strong>{{ $sale['item'] }}</strong>
+                                                @if($sale['item_code'])
+                                                    <br><small class="text-muted">{{ $sale['item_code'] }}</small>
+                                                @endif
+                                            </td>
+                                            <td>{{ $sale['category'] }}</td>
+                                            <td>{{ number_format($sale['quantity'],2) }}</td>
+                                            <td class="text-right"><strong>Rs {{ number_format($sale['amount'],2) }}</strong></td>
+                                            <td><span class="badge badge-warning">{{ $sale['reason'] }}</span></td>
+                                        </tr>
+                                    @endforeach
+                                </tbody>
+                            </table>
+                        </div>
+                    @else
+                        <div class="stx-empty">
+                            <span class="stx-empty-emoji">OK</span>
+                            <h5>Sab sale lines target categories me covered hain</h5>
+                            <p class="mb-0">Agar amount fir bhi alag hai to invoice grand total aur line total ke adjustment/tax/rounding ko check karein.</p>
+                        </div>
+                    @endif
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {{-- ===================== NEW: TOTAL TARGET / ACTUAL AMOUNT BREAKDOWN MODAL ===================== --}}
+    {{-- ===================== TOTAL TARGET / ACTUAL AMOUNT BREAKDOWN MODAL ===================== --}}
+    <div class="modal fade" id="stxAmountBreakdownModal" tabindex="-1" role="dialog" aria-hidden="true">
+        <div class="modal-dialog modal-xl" role="document">
+            <div class="modal-content" style="border-radius:var(--stx-card-radius);border:0;box-shadow:0 24px 60px rgba(99,102,241,.28)">
+                <div class="modal-header" style="border-bottom:1px solid #f1f5f9;background:linear-gradient(135deg,var(--stx-violet) 0%,var(--stx-indigo) 100%);color:#fff;border-radius:var(--stx-card-radius) var(--stx-card-radius) 0 0">
+                    <h5 class="modal-title" id="stxAmountModalTitle" style="font-weight:800"><i class="fas fa-users mr-2"></i> Party-wise Breakdown</h5>
+                    <div class="d-flex align-items-center">
+                        <span class="stx-icon-btn" id="stxAmountFullscreenBtn" title="Fullscreen"><i class="fas fa-expand"></i></span>
+                        <button type="button" class="close text-white ml-2" data-dismiss="modal" aria-label="Close" style="opacity:.9"><span aria-hidden="true">&times;</span></button>
+                    </div>
+                </div>
+                <div class="modal-body">
+                    <div class="d-flex justify-content-between align-items-center flex-wrap mb-3" style="gap:12px">
+                        <div class="stx-tabbar" id="stxAmountTabbar">
+                            <button class="stx-tab active" data-view="pie">🍩 Pie</button>
+                            <button class="stx-tab" data-view="bar">📊 Bars</button>
+                            <button class="stx-tab" data-view="table">📋 Table</button>
+                        </div>
+                        <div class="stx-modal-summary" id="stxAmountModalSummary"></div>
+                    </div>
+
+                    <div id="stxAmountPieView" class="stx-amount-view">
+                        <div class="stx-pie-wrap">
+                            <div class="stx-pie-canvas-col">
+                                <canvas id="stxAmountPieChart"></canvas>
+                                <div class="stx-pie-center-label"><b id="stxAmountPieCenterVal">0%</b><span id="stxAmountPieCenterLabel">Top Party</span></div>
+                            </div>
+                            <div class="stx-pie-legend" id="stxAmountPieLegend"></div>
+                        </div>
+                    </div>
+
+                    <div id="stxAmountBarView" class="stx-amount-view" style="display:none">
+                        <div class="stx-chart-box"><canvas id="stxAmountBarChart"></canvas></div>
+                    </div>
+
+                    <div id="stxAmountTableView" class="stx-amount-view" style="display:none;max-height:520px;overflow-y:auto">
+                        <div id="stxAmountModalBody"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {{-- ===================== PARTY-WISE PROGRESS MODAL ===================== --}}
+    <div class="modal fade" id="stxPartyProgressModal" tabindex="-1" role="dialog" aria-hidden="true">
+        <div class="modal-dialog modal-lg" role="document">
+            <div class="modal-content" style="border-radius:var(--stx-card-radius);border:0;box-shadow:0 24px 60px rgba(99,102,241,.28)">
+                <div class="modal-header" style="border-bottom:1px solid #f1f5f9;background:linear-gradient(135deg,var(--stx-violet) 0%,var(--stx-indigo) 100%);color:#fff;border-radius:var(--stx-card-radius) var(--stx-card-radius) 0 0">
+                    <h5 class="modal-title" style="font-weight:800"><i class="fas fa-users mr-2"></i> Party-wise Target Progress</h5>
+                    <button type="button" class="close text-white" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+                </div>
+                <div class="modal-body">
+                    <div class="stx-modal-toolbar">
+                        <div class="stx-modal-filters">
+                            <div>
+                                <div class="stx-input-label">📦 Product Category Filter</div>
+                                <select id="stxModalCategoryFilter" class="form-control">
+                                    <option value="">Sabhi Categories</option>
+                                    @foreach($categories as $category)
+                                        <option value="{{ $category->id }}">{{ $category->name }}</option>
+                                    @endforeach
+                                </select>
+                            </div>
+                            <div>
+                                <div class="stx-input-label">📍 State Filter</div>
+                                <select id="stxModalStateFilter" class="form-control">
+                                    <option value="">Sabhi States</option>
+                                    @foreach($states as $state)
+                                        <option value="{{ $state }}">{{ $state }}</option>
+                                    @endforeach
+                                </select>
+                            </div>
+                            <div>
+                                <div class="stx-input-label">🏙️ City Filter</div>
+                                <select id="stxModalCityFilter" class="form-control">
+                                    <option value="">Sabhi Cities</option>
+                                    @foreach($cities as $city)
+                                        <option value="{{ $city }}">{{ $city }}</option>
+                                    @endforeach
+                                </select>
+                            </div>
+                        </div>
+                        <div class="stx-modal-summary" id="stxModalSummary"></div>
+                    </div>
+                    <div id="stxPartyProgressContent" style="max-height:600px;overflow-y:auto">
+                        <div class="text-center py-4"><div class="spinner-border text-primary" role="status"><span class="sr-only">Loading...</span></div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {{-- ===================== CATEGORY DETAIL MODAL ===================== --}}
+    <div class="modal fade" id="stxCategoryDetailModal" tabindex="-1" role="dialog" aria-hidden="true">
+        <div class="modal-dialog modal-xl" role="document">
+            <div class="modal-content" style="border-radius:var(--stx-card-radius);border:0;box-shadow:0 24px 60px rgba(99,102,241,.28)">
+                <div class="modal-header" style="border-bottom:1px solid #f1f5f9;background:linear-gradient(135deg,var(--stx-violet) 0%,var(--stx-indigo) 100%);color:#fff;border-radius:var(--stx-card-radius) var(--stx-card-radius) 0 0">
+                    <div>
+                        <h5 class="modal-title mb-0" id="stxCatModalTitle" style="font-weight:800">🎯 Category Progress</h5>
+                        <small id="stxCatModalRange" style="opacity:.85"></small>
+                    </div>
+                    <div class="d-flex align-items-center">
+                        <span class="stx-icon-btn" id="stxCatFullscreenBtn" title="Fullscreen"><i class="fas fa-expand"></i></span>
+                        <span class="stx-icon-btn" id="stxCatDownloadBtn" title="Download PDF"><i class="fas fa-download"></i></span>
+                        <button type="button" class="close text-white ml-2" data-dismiss="modal" aria-label="Close" style="opacity:.9"><span aria-hidden="true">&times;</span></button>
+                    </div>
+                </div>
+                <div class="modal-body">
+                    <div class="stx-modal-toolbar">
+                        <div class="stx-modal-filters">
+                            <div>
+                                <div class="stx-input-label">📅 Month Filter</div>
+                                <select id="stxCatMonthFilter" class="form-control" style="min-width:220px"></select>
+                            </div>
+                            <div>
+                                <div class="stx-input-label">📍 State Filter</div>
+                                <select id="stxCatStateFilter" class="form-control">
+                                    <option value="">Sabhi States</option>
+                                    @foreach($states as $state)
+                                        <option value="{{ $state }}">{{ $state }}</option>
+                                    @endforeach
+                                </select>
+                            </div>
+                            <div>
+                                <div class="stx-input-label">🏙️ City Filter</div>
+                                <select id="stxCatCityFilter" class="form-control">
+                                    <option value="">Sabhi Cities</option>
+                                    @foreach($cities as $city)
+                                        <option value="{{ $city }}">{{ $city }}</option>
+                                    @endforeach
+                                </select>
+                            </div>
+                        </div>
+                        <div class="stx-modal-summary" id="stxCatModalSummary"></div>
+                    </div>
+                    <div id="stxCatModalLoading" class="stx-cat-modal-loading">
+                        <div class="spinner-border text-primary" role="status"><span class="sr-only">Loading...</span></div>
+                    </div>
+                    <div id="stxCatModalBody" style="display:none">
+                        <div class="stx-cat-chart-box"><canvas id="stxCategoryChart"></canvas></div>
+                        <div id="stxCatPartyList" class="stx-party-list"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+@endsection
+
+@push('scripts')
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script>
+$(function () {
+    const c = @json($charts);
+    const allRows = @json($rows);
+    const stxFilters = @json($filters);
+    const stxMonthOptions = @json($stxMonthOptions);
+    const stxCategoryBreakdownUrl = "{{ route('admin.sales-targets.report.category-breakdown') }}";
+    const palette = ['#7C3AED','#0ea5e9','#f59e0b','#10b981','#ef4444','#ec4899','#2563eb','#06b6d4'];
+    const paletteLight = ['#a78bfa','#7dd3fc','#fcd34d','#6ee7b7','#fca5a5','#f9a8d4','#93c5fd'];
+    const paletteDark  = ['#5b21b6','#0369a1','#b45309','#047857','#b91c1c','#be185d','#1d4ed8'];
+    const common = { responsive:true, maintainAspectRatio:false, animation:{ duration:1400, easing:'easeOutQuart' },
+        plugins:{ tooltip:{ enabled:true, displayColors:true } } };
+
+    const stxCategoryAgg = (function () {
+        const map = {};
+        allRows.forEach(r => {
+            const key = r.category_id ?? r.category;
+            if (!map[key]) {
+                map[key] = { category_id: r.category_id, category: r.category, target: 0, actual: 0, parties: new Set() };
+            }
+            map[key].target += parseFloat(r.target) || 0;
+            map[key].actual += parseFloat(r.actual) || 0;
+            map[key].parties.add(r.party_id);
+        });
+        return Object.values(map).map(v => ({
+            category_id: v.category_id,
+            category: v.category,
+            target: v.target,
+            actual: v.actual,
+            achievement: v.target > 0 ? (v.actual / v.target) * 100 : 0,
+            parties_count: v.parties.size
+        })).sort((a, b) => b.target - a.target);
+    })();
+    const catLabels = stxCategoryAgg.map(x => x.category);
+    const catTargets = stxCategoryAgg.map(x => x.target);
+    const catActuals = stxCategoryAgg.map(x => x.actual);
+    const catAchievements = stxCategoryAgg.map(x => x.achievement);
+
+    new Chart($('#stxPieChart'), { type:'doughnut',
+        data:{ labels:catLabels, datasets:[{
+            data:catActuals,
+            backgroundColor: function (context) {
+                const { chart, dataIndex } = context;
+                const { ctx, chartArea } = chart;
+                if (!chartArea) return palette[dataIndex % palette.length];
+                const gradient = ctx.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+                gradient.addColorStop(0, paletteLight[dataIndex % paletteLight.length]);
+                gradient.addColorStop(1, paletteDark[dataIndex % paletteDark.length]);
+                return gradient;
+            },
+            borderWidth: 3, borderColor: '#fff', hoverOffset: 16, borderRadius: 6, spacing: 3
+        }] },
+        options: { ...common, cutout: '66%', rotation: -15,
+            plugins: { tooltip: { enabled: true, displayColors: true }, legend: { display: false } } } });
+
+    (function () {
+        const totalTarget = catTargets.reduce((sum, v) => sum + v, 0) || 1;
+        let topIdx = 0, topShare = -1, legendHtml = '';
+        stxCategoryAgg.forEach((cat, i) => {
+            const share = (cat.target / totalTarget) * 100;
+            if (share > topShare) { topShare = share; topIdx = i; }
+            legendHtml += `<div class="stx-pie-legend-item">
+                <span class="stx-pie-legend-left">
+                    <span class="stx-pie-dot" style="background:${paletteDark[i % paletteDark.length]}"></span>
+                    ${cat.category}
+                    <small class="text-muted ml-1">(${cat.parties_count} ${cat.parties_count === 1 ? 'party' : 'parties'})</small>
+                </span>
+                <span class="stx-pie-legend-pct" title="Achievement">${share.toFixed(1)}% <small class="text-muted">/ ${cat.achievement.toFixed(1)}% ach.</small></span>
+            </div>`;
+        });
+        $('#stxPieLegend').html(legendHtml || '<div class="text-muted">Koi data nahi mila</div>');
+        $('#stxPieCenterVal').text(topShare >= 0 ? topShare.toFixed(0) + '%' : '0%');
+        $('#stxPieCenterLabel').text(catLabels[topIdx] ? (catLabels[topIdx] + ' target share') : 'Top Category');
+    })();
+
+    new Chart($('#stxCandleChart'), { type:'bar',
+        data:{ labels:catLabels, datasets:[
+            { label:'Target', data:catTargets, backgroundColor:'#ddd6fe', borderColor:'#7C3AED', borderWidth:2, borderRadius:8 },
+            { label:'Actual', data:catActuals, backgroundColor:'#5eead4', borderColor:'#0f766e', borderWidth:2, borderRadius:8 }
+        ] }, options:{ ...common, scales:{ y:{ beginAtZero:true } } } });
+
+    new Chart($('#stxWaveChart'), { type:'line',
+        data:{ labels:catLabels, datasets:[
+            { label:'Target wave', data:catTargets, borderColor:'#7C3AED', backgroundColor:'rgba(124,58,237,.12)', fill:true, tension:.45 },
+            { label:'Actual wave', data:catActuals, borderColor:'#0f766e', backgroundColor:'rgba(15,118,110,.12)', fill:true, tension:.45 }
+        ] }, options:{ ...common, scales:{ y:{ beginAtZero:true } } } });
+
+    new Chart($('#stxRadarChart'), { type:'radar',
+        data:{ labels:catLabels, datasets:[{ label:'Achievement %', data:catAchievements,
+            backgroundColor:'rgba(124,58,237,.2)', borderColor:'#7C3AED', pointBackgroundColor:palette }] },
+        options:{ ...common, scales:{ r:{ beginAtZero:true, suggestedMax:100 } } } });
+
+    $('.stx-tab').on('click', function () {
+        $('.stx-tab').removeClass('active');
+        $('.stx-pane').removeClass('active');
+        $(this).addClass('active');
+        $('#' + $(this).data('pane')).addClass('active');
+    });
+
+    if ($('#stxReportTable').length) {
+        $('#stxReportTable').DataTable({ pageLength:25, order:[[5,'desc']] });
+    }
+    if ($('#stxUncoveredSalesTable').length) {
+        $('#stxUncoveredSalesTable').DataTable({ pageLength:25, order:[[6,'desc']] });
+    }
+
+    $('.stx-count').each(function () {
+        const $el = $(this), target = parseFloat($el.data('target')) || 0;
+        let start = 0; const duration = 1100, startTime = performance.now();
+        function step(now) {
+            const progress = Math.min((now - startTime) / duration, 1);
+            const eased = 1 - Math.pow(1 - progress, 3);
+            $el.text(Number((target * eased)).toLocaleString('en-IN', { maximumFractionDigits:2 }));
+            if (progress < 1) requestAnimationFrame(step);
+        }
+        requestAnimationFrame(step);
+    });
+
+    const $ring = $('#stxAchRing');
+    if ($ring.length) {
+        const pct = Math.min(parseFloat($ring.data('pct')) || 0, 100);
+        const circumference = 150.8;
+        const offset = circumference - (circumference * pct / 100);
+        setTimeout(() => $ring.css('stroke-dashoffset', offset), 200);
+    }
+
+    $('.stx-progress-fill').each(function(){
+        const $bar = $(this), pct = Math.min(parseFloat($bar.data('pct'))||0, 100);
+        setTimeout(()=> $bar.css('width', pct+'%'), 250);
+    });
+
+    $('#stxFilterForm').on('submit', function () {
+        if (window.Swal) {
+            Swal.fire({ toast:true, position:'top-end', showConfirmButton:false, timer:1400,
+                icon:'success', title:'Filters apply ho rahe hain...' });
+        }
+    });
+    $('#stxExportExcel').on('click', function () {
+        if (window.Swal) {
+            Swal.fire({ toast:true, position:'top-end', showConfirmButton:false, timer:1600,
+                icon:'success', title:'Excel file taiyar ho rahi hai...' });
+        }
+    });
+    $('#stxExportPdf').on('click', function () {
+        if (window.Swal) {
+            Swal.fire({ toast:true, position:'top-end', showConfirmButton:false, timer:1600,
+                icon:'info', title:'PDF naye tab mein khul rahi hai...' });
+        }
+    });
+
+    // ===== TOTAL TARGET / ACTUAL AMOUNT — party-wise breakdown modal =====
+    // Both KPI cards share the same underlying dataset: amount-type target rows only
+    // (so the numbers always line up with what the "Total Target" / "Actual Amount"
+    // cards actually show — no mixing of %, qty and ₹). Modal now supports three
+    // views (Pie / Bars / Table) + fullscreen.
+    let stxAmountPieChart = null;
+    let stxAmountBarChart = null;
+    let stxAmountPartiesData = [];
+
+    function stxAmountAggregatedByParty() {
+        const amountRows = allRows.filter(r => r.target_type === 'amount');
+        const grouped = {};
+        amountRows.forEach(r => {
+            if (!grouped[r.party]) grouped[r.party] = { party: r.party, target: 0, actual: 0 };
+            grouped[r.party].target += parseFloat(r.target) || 0;
+            grouped[r.party].actual += parseFloat(r.actual_amount ?? r.actual) || 0;
+        });
+        return Object.values(grouped).sort((a, b) => b.target - a.target);
+    }
+
+    function stxDestroyAmountCharts() {
+        if (stxAmountPieChart) { try { stxAmountPieChart.destroy(); } catch (e) {} stxAmountPieChart = null; }
+        if (stxAmountBarChart) { try { stxAmountBarChart.destroy(); } catch (e) {} stxAmountBarChart = null; }
+    }
+
+    function stxBuildAmountPieChart(parties, valueKey) {
+        if (stxAmountPieChart) { try { stxAmountPieChart.destroy(); } catch (e) {} }
+        const labels = parties.map(p => p.party);
+        const values = parties.map(p => p[valueKey]);
+
+        stxAmountPieChart = new Chart($('#stxAmountPieChart'), {
+            type: 'doughnut',
+            data: { labels, datasets: [{
+                data: values,
+                backgroundColor: function (context) {
+                    const { chart, dataIndex } = context;
+                    const { ctx, chartArea } = chart;
+                    if (!chartArea) return palette[dataIndex % palette.length];
+                    const gradient = ctx.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+                    gradient.addColorStop(0, paletteLight[dataIndex % paletteLight.length]);
+                    gradient.addColorStop(1, paletteDark[dataIndex % paletteDark.length]);
+                    return gradient;
+                },
+                borderWidth: 3, borderColor: '#fff', hoverOffset: 16, borderRadius: 6, spacing: 3
+            }] },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                animation: { duration: 1200, easing: 'easeOutQuart' },
+                cutout: '66%', rotation: -15,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        enabled: true, displayColors: true,
+                        callbacks: {
+                            label: (ctx) => {
+                                const p = parties[ctx.dataIndex];
+                                return p.party + ': ₹' + Number(ctx.raw).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        const total = values.reduce((s, v) => s + v, 0) || 1;
+        let topIdx = 0, topShare = -1, legendHtml = '';
+        parties.forEach((p, i) => {
+            const share = (p[valueKey] / total) * 100;
+            if (share > topShare) { topShare = share; topIdx = i; }
+            const ach = p.target > 0 ? (p.actual / p.target) * 100 : 0;
+            legendHtml += `<div class="stx-pie-legend-item">
+                <span class="stx-pie-legend-left">
+                    <span class="stx-pie-dot" style="background:${paletteDark[i % paletteDark.length]}"></span>
+                    ${p.party}
+                </span>
+                <span class="stx-pie-legend-pct">${share.toFixed(1)}% <small class="text-muted">/ ${ach.toFixed(1)}% ach.</small></span>
+            </div>`;
+        });
+        $('#stxAmountPieLegend').html(legendHtml || '<div class="text-muted">Koi data nahi mila</div>');
+        $('#stxAmountPieCenterVal').text(topShare >= 0 ? topShare.toFixed(0) + '%' : '0%');
+        $('#stxAmountPieCenterLabel').text(labels[topIdx] ? (labels[topIdx] + ' share') : 'Top Party');
+    }
+
+    function stxBuildAmountBarChart(parties) {
+        if (stxAmountBarChart) { try { stxAmountBarChart.destroy(); } catch (e) {} }
+        stxAmountBarChart = new Chart($('#stxAmountBarChart'), {
+            type: 'bar',
+            data: {
+                labels: parties.map(p => p.party),
+                datasets: [
+                    { label: 'Target', data: parties.map(p => p.target), backgroundColor: '#ddd6fe', borderColor: '#7C3AED', borderWidth: 2, borderRadius: 8 },
+                    { label: 'Actual', data: parties.map(p => p.actual), backgroundColor: '#5eead4', borderColor: '#0f766e', borderWidth: 2, borderRadius: 8 }
+                ]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                animation: { duration: 1000, easing: 'easeOutQuart' },
+                scales: { y: { beginAtZero: true } }
+            }
+        });
+    }
+
+    function stxRenderAmountBreakdownModal(source) {
+        const parties = stxAmountAggregatedByParty();
+        stxAmountPartiesData = parties;
+        const isTarget = source === 'target';
+        $('#stxAmountModalTitle').html('<i class="fas fa-users mr-2"></i> ' + (isTarget ? 'Total Target' : 'Actual Amount') + ' — Party-wise Breakdown');
+
+        let totalTarget = 0, totalActual = 0, tableHtml = '';
+        parties.forEach(p => {
+            totalTarget += p.target; totalActual += p.actual;
+            const ach = p.target > 0 ? (p.actual / p.target) * 100 : 0;
+            tableHtml += `<div class="stx-cat-party-row">
+                <div class="stx-cat-party-name"><strong>${p.party}</strong></div>
+                <div class="stx-cat-party-bar-wrap">
+                    <div class="stx-progress-track">
+                        <div class="stx-progress-fill" style="width:${Math.min(ach,100)}%;background:${ach>=100?'linear-gradient(90deg,#10b981,#5eead4)':'linear-gradient(90deg,#7C3AED,#6366F1)'}"></div>
+                    </div>
+                </div>
+                <div class="stx-cat-party-nums">
+                    <span>Target: <b>₹${p.target.toLocaleString('en-IN',{maximumFractionDigits:2})}</b></span>
+                    <span>Actual: <b>₹${p.actual.toLocaleString('en-IN',{maximumFractionDigits:2})}</b></span>
+                    <span class="stx-badge-ach ${ach>=100?'good':'warn'}">${ach.toFixed(1)}%</span>
+                </div>
+            </div>`;
+        });
+        if (!parties.length) {
+            tableHtml = '<div class="stx-empty"><span class="stx-empty-emoji">🔍</span><h5>Koi amount-based target nahi mila</h5><p class="mb-0">Filters change karke phir try karein.</p></div>';
+        }
+        $('#stxAmountModalBody').html(tableHtml);
+
+        const overallAch = totalTarget > 0 ? (totalActual / totalTarget) * 100 : 0;
+        $('#stxAmountModalSummary').html(`
+            <span class="stx-chip">Parties: <b>${parties.length}</b></span>
+            <span class="stx-chip">Total Target: <b>₹${totalTarget.toLocaleString('en-IN',{maximumFractionDigits:2})}</b></span>
+            <span class="stx-chip">Total Actual: <b>₹${totalActual.toLocaleString('en-IN',{maximumFractionDigits:2})}</b></span>
+            <span class="stx-chip">Achievement: <b>${overallAch.toFixed(1)}%</b></span>
+        `);
+
+        // Modal khulte hi hamesha Pie view default rahe
+        $('#stxAmountTabbar .stx-tab').removeClass('active');
+        $('#stxAmountTabbar .stx-tab[data-view="pie"]').addClass('active');
+        $('.stx-amount-view').hide();
+        $('#stxAmountPieView').show();
+
+        stxDestroyAmountCharts();
+        stxBuildAmountPieChart(parties, isTarget ? 'target' : 'actual');
+    }
+
+    $(document).on('click', '.stx-kpi-clickable[data-source]', function () {
+        stxRenderAmountBreakdownModal($(this).data('source'));
+    });
+
+    // Tab switching: Bar chart lazily banta hai jab tab pehli baar khule
+    // (Chart.js ko canvas visible hone par hi sahi size milta hai).
+    $(document).on('click', '#stxAmountTabbar .stx-tab', function () {
+        const view = $(this).data('view');
+        $('#stxAmountTabbar .stx-tab').removeClass('active');
+        $(this).addClass('active');
+        $('.stx-amount-view').hide();
+
+        if (view === 'pie') {
+            $('#stxAmountPieView').show();
+            if (stxAmountPieChart) stxAmountPieChart.resize();
+        } else if (view === 'bar') {
+            $('#stxAmountBarView').show();
+            if (!stxAmountBarChart) stxBuildAmountBarChart(stxAmountPartiesData);
+            else stxAmountBarChart.resize();
+        } else {
+            $('#stxAmountTableView').show();
+        }
+    });
+
+    $('#stxAmountBreakdownModal').on('hidden.bs.modal', function () {
+        stxDestroyAmountCharts();
+        $('#stxAmountBreakdownModal .modal-dialog').removeClass('stx-modal-fullscreen');
+        $('#stxAmountFullscreenBtn i').removeClass('fa-compress').addClass('fa-expand');
+    });
+
+    $('#stxAmountFullscreenBtn').on('click', function () {
+        $('#stxAmountBreakdownModal .modal-dialog').toggleClass('stx-modal-fullscreen');
+        const isFull = $('#stxAmountBreakdownModal .modal-dialog').hasClass('stx-modal-fullscreen');
+        $(this).find('i').toggleClass('fa-expand', !isFull).toggleClass('fa-compress', isFull);
+        setTimeout(() => {
+            if (stxAmountPieChart) stxAmountPieChart.resize();
+            if (stxAmountBarChart) stxAmountBarChart.resize();
+        }, 300);
+    });
+
+    // ===== PARTY-WISE PROGRESS MODAL =====
+    let stxPartyCharts = [];
+    function stxDestroyPartyCharts() {
+        stxPartyCharts.forEach(ch => { try { ch.destroy(); } catch (e) {} });
+        stxPartyCharts = [];
+    }
+
+    function stxBuildPartyReport(categoryFilter, stateFilter, cityFilter) {
+        stxDestroyPartyCharts();
+        const groupedByParty = {};
+
+        let filteredRows = allRows;
+        if (categoryFilter) {
+            filteredRows = filteredRows.filter(r => String(r.category_id) === String(categoryFilter));
+        }
+        if (stateFilter) {
+            filteredRows = filteredRows.filter(r => (r.party_state || '') === stateFilter);
+        }
+        if (cityFilter) {
+            filteredRows = filteredRows.filter(r => (r.party_city || '') === cityFilter);
+        }
+
+        filteredRows.forEach((row) => {
+            if (!groupedByParty[row.party]) {
+                groupedByParty[row.party] = {
+                    party_id: row.party_id,
+                    state: row.party_state || 'N/A',
+                    city: row.party_city || 'N/A',
+                    color: palette[Object.keys(groupedByParty).length % palette.length],
+                    categories: []
+                };
+            }
+            groupedByParty[row.party].categories.push(row);
+        });
+
+        const parties = Object.keys(groupedByParty).sort();
+
+        const totalTargetAll = filteredRows.reduce((s, r) => s + (parseFloat(r.target) || 0), 0);
+        const totalActualAll = filteredRows.reduce((s, r) => s + (parseFloat(r.actual) || 0), 0);
+        const overallAch = totalTargetAll > 0 ? (totalActualAll / totalTargetAll) * 100 : 0;
+        $('#stxModalSummary').html(`
+            <span class="stx-chip">Parties: <b>${parties.length}</b></span>
+            <span class="stx-chip">Avg Achievement: <b>${overallAch.toFixed(1)}%</b></span>
+        `);
+
+        if (!parties.length) {
+            $('#stxPartyProgressContent').html('<div class="stx-empty"><span class="stx-empty-emoji">🔍</span><h5>Is filter ke liye koi data nahi mila</h5><p class="mb-0">Filter change karke phir try karein.</p></div>');
+            return;
+        }
+
+        let html = '<div class="stx-party-list">';
+        parties.forEach((partyName, partyIdx) => {
+            const partyData = groupedByParty[partyName];
+            const categories = partyData.categories;
+            const partyTarget = categories.reduce((sum, cat) => sum + cat.target, 0);
+            const partyActual = categories.reduce((sum, cat) => sum + cat.actual, 0);
+            const partyAchievement = partyTarget > 0 ? (partyActual / partyTarget) * 100 : 0;
+            const chartId = 'stxPartyPie' + partyIdx;
+
+            html += `<div class="stx-party-card" style="border-left:4px solid ${partyData.color}">
+                <div class="stx-party-header">
+                    <div class="stx-party-title">
+                        <div>
+                            <strong style="color:${partyData.color};font-size:16px">
+                                ${partyName}
+                            </strong>
+                            <div style="font-size:12px;color:#64748b;margin-top:3px;font-weight:500;">
+                                📍 ${partyData.city}, ${partyData.state}
+                            </div>
+                        </div>
+                        <span class="stx-party-badge" style="background:${partyData.color}22;color:${partyData.color}">
+                            ${partyAchievement.toFixed(1)}%
+                        </span>
+                    </div>
+                </div>
+                <div class="stx-party-body-row">
+                    <div class="stx-party-pie-col">
+                        <canvas id="${chartId}" width="96" height="96"></canvas>
+                    </div>
+                    <div class="stx-party-body">`;
+
+            categories.forEach((cat, catIdx) => {
+                const catAch = cat.target > 0 ? (cat.actual / cat.target) * 100 : 0;
+                html += `<div class="stx-party-category">
+                    <div class="stx-cat-row">
+                        <span class="stx-cat-name" style="border-left:3px solid ${palette[catIdx % palette.length]}">
+                            ${cat.category}
+                        </span>
+                        <span class="stx-cat-achievement" style="
+                            background:${catAch >= 100 ? '#dcfce7' : '#fef3c7'};
+                            color:${catAch >= 100 ? '#15803d' : '#b45309'}
+                        ">
+                            ${catAch.toFixed(1)}%
+                        </span>
+                    </div>
+                    <div class="stx-cat-progress">
+                        <div class="stx-cat-bar" style="
+                            background:${catAch >= 100
+                                ? 'linear-gradient(90deg,#10b981,#5eead4)'
+                                : 'linear-gradient(90deg,#7C3AED,#6366F1)'};
+                            width:${Math.min(catAch, 100)}%
+                        "></div>
+                    </div>
+                    <div class="stx-cat-details">
+                        <small>Target: ${cat.target.toFixed(2)}</small>
+                        <small>Actual: ${cat.actual.toFixed(2)}</small>
+                    </div>
+                </div>`;
+            });
+
+            html += `</div></div></div>`;
+        });
+        html += '</div>';
+        $('#stxPartyProgressContent').html(html);
+
+        parties.forEach((partyName, partyIdx) => {
+            const categories = groupedByParty[partyName].categories;
+            const canvas = document.getElementById('stxPartyPie' + partyIdx);
+            if (!canvas) return;
+            const values = categories.map(cat => (parseFloat(cat.actual) || 0));
+            const hasData = values.some(v => v > 0);
+            const ch = new Chart(canvas, {
+                type: 'doughnut',
+                data: {
+                    labels: categories.map(cat => cat.category),
+                    datasets: [{
+                        data: hasData ? values : categories.map(() => 1),
+                        backgroundColor: categories.map((_, i) => palette[i % palette.length]),
+                        borderWidth: 2,
+                        borderColor: '#fff',
+                        hoverOffset: 8
+                    }]
+                },
+                options: {
+                    responsive: false,
+                    maintainAspectRatio: false,
+                    cutout: '58%',
+                    animation: { duration: 800, easing: 'easeOutQuart' },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: function (ctx) {
+                                    const cat = categories[ctx.dataIndex];
+                                    return cat.category + ': ' + Number(cat.actual).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+            stxPartyCharts.push(ch);
+        });
+    }
+
+    $('#stxPartyProgressModal').on('show.bs.modal', function () {
+        stxBuildPartyReport(
+            $('#stxModalCategoryFilter').val(),
+            $('#stxModalStateFilter').val(),
+            $('#stxModalCityFilter').val()
+        );
+    });
+    $('#stxPartyProgressModal').on('hidden.bs.modal', function () {
+        stxDestroyPartyCharts();
+        $('#stxModalCategoryFilter, #stxModalStateFilter, #stxModalCityFilter').val('');
+    });
+    $(document).on('change', '#stxModalCategoryFilter, #stxModalStateFilter, #stxModalCityFilter', function () {
+        stxBuildPartyReport(
+            $('#stxModalCategoryFilter').val(),
+            $('#stxModalStateFilter').val(),
+            $('#stxModalCityFilter').val()
+        );
+    });
+
+    // ===== CATEGORY DETAIL MODAL =====
+    let stxCategoryChart = null;
+    let stxCurrentCategoryData = null;
+    let stxCurrentCategoryId = null;
+
+    let stxCatMonthHtml = `<option value="">Poori Range (${stxFilters.from} &rarr; ${stxFilters.to})</option>`;
+    stxMonthOptions.forEach(m => { stxCatMonthHtml += `<option value="${m.value}">${m.label}</option>`; });
+    $('#stxCatMonthFilter').html(stxCatMonthHtml);
+
+    function stxFetchCategoryData(categoryId, month) {
+        $('#stxCatModalLoading').show();
+        $('#stxCatModalBody').hide();
+        const params = { category_id: categoryId };
+        if (month) { params.month = month; } else { params.from_date = stxFilters.from; params.to_date = stxFilters.to; }
+        const stateVal = $('#stxCatStateFilter').val();
+        const cityVal = $('#stxCatCityFilter').val();
+        if (stateVal) { params.party_state = stateVal; }
+        if (cityVal) { params.party_city = cityVal; }
+        $.get(stxCategoryBreakdownUrl, params)
+            .done(function (data) { stxRenderCategoryModal(data); })
+            .fail(function () {
+                $('#stxCatModalLoading').hide();
+                $('#stxCatModalBody').show();
+                $('#stxCatPartyList').html('<div class="stx-empty"><span class="stx-empty-emoji">⚠️</span><h5>Data load nahi ho paya</h5><p class="mb-0">Phir se try karein.</p></div>');
+            });
+    }
+
+    function stxRenderCategoryModal(data) {
+        stxCurrentCategoryData = data;
+        $('#stxCatModalLoading').hide();
+        $('#stxCatModalBody').show();
+        $('#stxCatModalTitle').text('🎯 ' + (data.category || 'Category') + ' — Party-wise Progress');
+        $('#stxCatModalRange').text(data.from + '  →  ' + data.to);
+        $('#stxCatModalSummary').html(`
+            <span class="stx-chip">Parties: <b>${data.totals.parties_count}</b></span>
+            <span class="stx-chip">Total Target: <b>${Number(data.totals.target).toLocaleString('en-IN',{maximumFractionDigits:2})}</b></span>
+            <span class="stx-chip">Total Actual: <b>${Number(data.totals.actual).toLocaleString('en-IN',{maximumFractionDigits:2})}</b></span>
+            <span class="stx-chip">Achievement: <b>${data.totals.achievement.toFixed(1)}%</b></span>
+        `);
+
+        if (!data.parties.length) {
+            $('#stxCatPartyList').html('<div class="stx-empty"><span class="stx-empty-emoji">🔍</span><h5>Is category/month/filter ke liye koi party target nahi mila</h5><p class="mb-0">Filter change karke dekhein.</p></div>');
+        } else {
+            let html = '';
+            data.parties.forEach(p => {
+                const pct = Math.min(p.achievement, 100);
+                const locationLabel = (p.party_city || p.party_state)
+                    ? `${p.party_city || 'N/A'}, ${p.party_state || 'N/A'}`
+                    : '';
+                html += `
+                    <div class="stx-cat-party-row">
+                        <div class="stx-cat-party-name">
+                            <h4><strong>${p.party}</strong></h4>
+                            ${locationLabel ? `<h6>📍 ${locationLabel}</h6>` : ''}
+                        </div>
+                        <div class="stx-cat-party-bar-wrap">
+                            <div class="stx-progress-track">
+                                <div class="stx-progress-fill" style="width:${pct}%;background:${p.achievement >= 100 ? 'linear-gradient(90deg,#10b981,#5eead4)' : 'linear-gradient(90deg,#7C3AED,#6366F1)'};"></div>
+                            </div>
+                        </div>
+                        <div class="stx-cat-party-nums">
+                            <span>Target: <b>${Number(p.target).toLocaleString('en-IN',{maximumFractionDigits:2})}</b></span>
+                            <span>Actual: <b>${Number(p.actual).toLocaleString('en-IN',{maximumFractionDigits:2})}</b></span>
+                            <span class="stx-badge-ach ${p.achievement >= 100 ? 'good' : 'warn'}">${p.achievement.toFixed(1)}%</span>
+                        </div>
+                    </div>
+                `;
+            });
+            $('#stxCatPartyList').html(html);
+        }
+
+        if (stxCategoryChart) { try { stxCategoryChart.destroy(); } catch (e) {} }
+        const ctx = document.getElementById('stxCategoryChart');
+        stxCategoryChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: data.parties.map(p => p.party),
+                datasets: [
+                    { label: 'Target', data: data.parties.map(p => p.target), backgroundColor: '#ddd6fe', borderColor: '#7C3AED', borderWidth: 2, borderRadius: 8 },
+                    { label: 'Actual', data: data.parties.map(p => p.actual), backgroundColor: '#5eead4', borderColor: '#0f766e', borderWidth: 2, borderRadius: 8 }
+                ]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                animation: { duration: 900, easing: 'easeOutQuart' },
+                scales: { y: { beginAtZero: true } }
+            }
+        });
+    }
+
+    $(document).on('click', '.stx-cat-clickable', function () {
+        stxCurrentCategoryId = $(this).data('category-id');
+        const categoryName = $(this).data('category-name');
+        $('#stxCatModalTitle').text('🎯 ' + categoryName + ' — Party-wise Progress');
+        $('#stxCatMonthFilter').val('');
+        $('#stxCatStateFilter').val('');
+        $('#stxCatCityFilter').val('');
+        $('#stxCategoryDetailModal').modal('show');
+        stxFetchCategoryData(stxCurrentCategoryId, null);
+    });
+
+    $(document).on('change', '#stxCatMonthFilter', function () {
+        if (!stxCurrentCategoryId) return;
+        stxFetchCategoryData(stxCurrentCategoryId, $(this).val());
+    });
+
+    $(document).on('change', '#stxCatStateFilter, #stxCatCityFilter', function () {
+        if (!stxCurrentCategoryId) return;
+        stxFetchCategoryData(stxCurrentCategoryId, $('#stxCatMonthFilter').val());
+    });
+
+    $('#stxCategoryDetailModal').on('hidden.bs.modal', function () {
+        if (stxCategoryChart) { try { stxCategoryChart.destroy(); } catch (e) {} stxCategoryChart = null; }
+        $('#stxCategoryDetailModal .modal-dialog').removeClass('stx-modal-fullscreen');
+        $('#stxCatFullscreenBtn i').removeClass('fa-compress').addClass('fa-expand');
+    });
+
+    $('#stxCatFullscreenBtn').on('click', function () {
+        $('#stxCategoryDetailModal .modal-dialog').toggleClass('stx-modal-fullscreen');
+        const isFull = $('#stxCategoryDetailModal .modal-dialog').hasClass('stx-modal-fullscreen');
+        $(this).find('i').toggleClass('fa-expand', !isFull).toggleClass('fa-compress', isFull);
+        if (stxCategoryChart) { setTimeout(() => stxCategoryChart.resize(), 300); }
+    });
+
+    $('#stxCatDownloadBtn').on('click', function () {
+        if (!stxCurrentCategoryData || !window.jspdf) return;
+        const { jsPDF } = window.jspdf;
+        const data = stxCurrentCategoryData;
+        const doc = new jsPDF('p', 'pt', 'a4');
+
+        doc.setFontSize(16);
+        doc.setTextColor(30, 27, 75);
+        doc.text((data.category || 'Category') + ' — Party-wise Progress', 40, 42);
+
+        doc.setFontSize(10);
+        doc.setTextColor(100);
+        doc.text('Date Range: ' + data.from + '  to  ' + data.to, 40, 60);
+        doc.text('Parties: ' + data.totals.parties_count
+            + '   |   Total Target: ' + Number(data.totals.target).toLocaleString('en-IN', { maximumFractionDigits: 2 })
+            + '   |   Total Actual: ' + Number(data.totals.actual).toLocaleString('en-IN', { maximumFractionDigits: 2 })
+            + '   |   Achievement: ' + data.totals.achievement.toFixed(1) + '%', 40, 74);
+
+        let y = 96;
+        if (stxCategoryChart) {
+            try {
+                const img = stxCategoryChart.toBase64Image();
+                doc.addImage(img, 'PNG', 40, y, 500, 240);
+                y += 260;
+            } catch (e) { /* chart image not available, skip */ }
+        }
+
+        if (typeof doc.autoTable === 'function') {
+            doc.autoTable({
+                startY: y,
+                head: [['Party', 'Target', 'Actual', 'Achievement %']],
+                body: data.parties.map(p => [p.party, Number(p.target).toFixed(2), Number(p.actual).toFixed(2), p.achievement.toFixed(1) + '%']),
+                styles: { fontSize: 9 },
+                headStyles: { fillColor: [124, 58, 237] },
+                margin: { left: 40, right: 40 }
+            });
+        }
+
+        const safeName = (data.category || 'category').replace(/[^a-z0-9]+/gi, '-');
+        doc.save(safeName + '-progress.pdf');
+    });
+});
+</script>
+@endpush

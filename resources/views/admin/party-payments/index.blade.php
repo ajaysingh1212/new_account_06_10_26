@@ -1,0 +1,68 @@
+@extends('layouts.admin')
+@section('title', $type === 'payment_out' ? 'Payment Out' : ($type === 'payment_in' ? 'Payment In' : 'Party Payments'))
+
+@section('content')
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h3 class="card-title m-0"><i class="fas fa-money-check-alt mr-2 text-purple"></i> Party Payments</h3>
+        <div>
+            @can('party_payments.create')<a href="{{ route('admin.party-payments.create', ['type' => 'payment_in']) }}" class="btn btn-success btn-sm"><i class="fas fa-arrow-down mr-1"></i> Payment In</a>@endcan
+            @can('party_payments.create')<a href="{{ route('admin.party-payments.create', ['type' => 'payment_out']) }}" class="btn btn-danger btn-sm"><i class="fas fa-arrow-up mr-1"></i> Payment Out</a>@endcan
+        </div>
+    </div>
+    <div class="card-body">
+        @if(session('success'))<div class="alert alert-success">{{ session('success') }}</div>@endif
+        <div class="table-responsive">
+            <table id="paymentsTable" class="table table-hover">
+                <thead><tr><th>Date</th><th>Type</th><th>Party</th><th>Bank/Cash</th><th>Bills</th><th>Reference</th><th>Invoice Amount</th><th>Discount</th><th>Expense</th><th>Final Collection</th><th>Mode</th><th>Created By</th><th>Actions</th></tr></thead>
+                <tbody>
+                @foreach($payments as $payment)
+                    <tr>
+                        <td>{{ $payment->payment_date?->format('d M Y') }}</td>
+                        <td>
+                            <span class="{{ $payment->payment_type === 'payment_in' ? 'badge-active' : 'badge-inactive' }}">{{ str_replace('_', ' ', ucfirst($payment->payment_type)) }}</span>
+                            @if($payment->advance)
+                                <div class="mt-1"><span class="badge badge-info">Advance</span></div>
+                            @endif
+                        </td>
+                        <td>{{ $payment->party?->display_name }}</td>
+                        <td>{{ $payment->bankAccount?->account_name }}</td>
+                        <td>
+                            @forelse($payment->allocations as $allocation)
+                                <div><b>{{ $allocation->bill_type === 'opening_balance' ? 'Opening Balance' : $allocation->bill_no }}</b>: Rs {{ number_format((float) $allocation->amount, 2) }}</div>
+                                @if($payment->payment_type === 'payment_in')
+                                <small>Outsource: Rs {{ number_format((float) $allocation->outsource_expense_amount, 2) }} | Received: Rs {{ number_format((float) $allocation->amount - (float) $allocation->outsource_expense_amount - (float) $payment->discount_amount * (float) $allocation->amount / max(0.01, (float) $payment->amount), 2) }}</small>
+                                @endif
+                            @empty
+                                -
+                            @endforelse
+                        </td>
+                        <td>{{ $payment->reference_no ?: '-' }}</td>
+                        <td>Rs {{ number_format((float) $payment->amount, 2) }}</td>
+                        <td>Rs {{ number_format((float) $payment->discount_amount, 2) }}</td>
+                        <td>Rs {{ number_format((float) $payment->outsource_expense_amount, 2) }}</td>
+                        <td><strong>Rs {{ number_format((float) $payment->total_amount, 2) }}</strong></td>
+                        <td>{{ $payment->payment_mode ?: '-' }}</td>
+                        <td><strong>{{ $payment->creator?->name ?? 'System' }}</strong><br><small class="text-muted">{{ $payment->creator?->rolesForCompany($payment->company_id)->pluck('name')->join(', ') ?: 'No role' }}</small></td>
+                        <td>
+                            @can('party_payments.create')
+                                <a href="{{ route('admin.party-payments.edit', $payment) }}" class="btn btn-sm btn-info mb-1"><i class="fas fa-edit"></i></a>
+                                <form action="{{ route('admin.party-payments.destroy', $payment) }}" method="POST" class="d-inline" onsubmit="return confirm('Is payment ko delete karne par payment revert ho jayega aur create/update ka sara ledger effect undo ho jayega. Kya aap continue karna chahte hain?');">
+                                    @csrf
+                                    @method('DELETE')
+                                    <button class="btn btn-sm btn-danger mb-1"><i class="fas fa-trash"></i></button>
+                                </form>
+                            @endcan
+                        </td>
+                    </tr>
+                @endforeach
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+@endsection
+
+@push('scripts')
+<script>$('#paymentsTable').DataTable({pageLength:25, order:[[0,'desc']]});</script>
+@endpush

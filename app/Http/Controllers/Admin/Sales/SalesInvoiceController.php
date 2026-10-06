@@ -1,0 +1,1682 @@
+<?php
+
+namespace App\Http\Controllers\Admin\Sales;
+
+use App\Http\Controllers\Controller;
+use App\Models\AuditLog;
+use App\Models\BankAccount;
+use App\Models\Company;
+use App\Models\CompanyMerge;
+use App\Models\CostCenter;
+use App\Models\EntryVisibility;
+use App\Models\Item;
+use App\Models\Party;
+use App\Models\PartyAdvanceAllocation;
+use App\Models\ProductCategory;
+use App\Models\ProductType;
+use App\Models\PurchaseBill;
+use App\Models\PurchaseBillItem;
+use App\Models\Role;
+use App\Models\SalesInvoice;
+use App\Models\SalesInvoiceItem;
+use App\Models\SalesReturn;
+use App\Models\SalesReturnItem;
+use App\Models\StockMovement;
+use App\Models\SubCostCenter;
+use App\Models\TermsTemplate;
+use App\Models\User;
+use App\Services\AccountingService;
+use App\Services\EntryVisibilityService;
+use App\Services\PartyAdvanceService;
+use App\Services\SalesProfitService;
+use App\Services\SerialUnitService;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+
+class SalesInvoiceController extends Controller
+{
+    public function index(EntryVisibilityService $visibility, SalesProfitService $profits)
+    {
+        $invoices = $visibility->scopeForUser(
+            SalesInvoice::with(['party', 'creator', 'items.item.bomMaterials.rawItem', 'returns.items.item', 'returns.creator', 'creditNotes.items']),
+            SalesInvoice::class
+        )->get()
+            ->sortBy(fn (SalesInvoice $invoice) => sprintf(
+                '%02d-%04d-%02d-%06d',
+                (int) ($invoice->billing_date?->month ?? 13),
+                (int) ($invoice->billing_date?->year ?? 9999),
+                (int) ($invoice->billing_date?->day ?? 31),
+                (int) $invoice->id
+            ))
+            ->values();
+        $invoiceDetails = $invoices->mapWithKeys(fn (SalesInvoice $invoice) => [
+            $invoice->id => $profits->invoiceDetail($invoice),
+        ]);
+        $invoiceReturnDetails = $invoices->mapWithKeys(fn (SalesInvoice $invoice) => [
+            $invoice->id => $this->invoiceReturnSummary($invoice),
+        ]);
+
+        return view('admin.sales.index', compact('invoices', 'invoiceDetails', 'invoiceReturnDetails'));
+    }
+
+    public function create()
+    {
+        return view('admin.sales.create', $this->formData());
+    }
+
+    public function edit(SalesInvoice $sale, EntryVisibilityService $visibility)
+    {
+        $visibility->authorizeView($sale);
+        $sale->load(['items.item', 'party']);
+        $advanceApplications = PartyAdvanceAllocation::with('advance')
+            ->where('company_id', $sale->company_id)
+            ->where('document_type', SalesInvoice::class)
+            ->where('document_id', $sale->id)
+            ->orderBy('id')
+            ->get()
+            ->map(fn (PartyAdvanceAllocation $allocation) => [
+                'id' => $allocation->id,
+                'party_advance_id' => $allocation->party_advance_id,
+                'amount' => (float) $allocation->amount,
+                'advance' => [
+                    'id' => $allocation->advance?->id,
+                    'advance_date_label' => $allocation->advance?->advance_date?->format('d M Y'),
+                    'reference_no' => $allocation->advance?->reference_no ?: '-',
+                    'remaining_amount' => (float) ($allocation->advance?->remaining_amount ?? 0),
+                    'payment_mode' => $allocation->advance?->payment_mode ?: '-',
+                    'description' => $allocation->advance?->description ?: '-',
+                ],
+            ])
+            ->values();
+
+        return view('admin.sales.edit', array_merge($this->formData($sale), [
+            'invoice' => $sale,
+            'advanceApplications' => $advanceApplications,
+            'interCompanyStockStatus' => $this->interCompanyStockStatus($sale),
+        ]));
+    }
+
+    public function repairInterCompanyStock(SalesInvoice $sale, EntryVisibilityService $visibility, AccountingService $accounting, Request $request)
+    {
+        $visibility->authorizeManage($sale);
+        abort_unless($sale->inter_company_transfer, 422, 'Auto purchase is not enabled for this sale.');
+        $repaired = 0;
+
+        $requestedTargets = collect($request->input('target_company_ids', []))->map(fn ($id) => (int) $id)->filter()->values();
+        $requestedLines = collect($request->input('line_ids', []))->map(fn ($id) => (int) $id)->filter()->values();
+        $requestedUnitToken = $request->input('unit_token');
+        $forceAdd = $request->boolean('force_add');
+
+        DB::transaction(function () use ($sale, $accounting, &$repaired, $requestedTargets, $requestedLines, $requestedUnitToken, $forceAdd) {
+            $sale->load(['items.item']);
+            foreach (array_map('intval', $sale->inter_company_target_company_ids ?? []) as $targetCompanyId) {
+                if ($requestedTargets->isNotEmpty() && ! $requestedTargets->contains($targetCompanyId)) {
+                    continue;
+                }
+                $purchase = PurchaseBill::with(['items.item'])->where('company_id', $targetCompanyId)->where('source_sales_invoice_id', $sale->id)->first();
+                if (! $purchase) {
+                    continue;
+                }
+                foreach ($purchase->items as $line) {
+                    if ($requestedLines->isNotEmpty() && ! $requestedLines->contains((int) $line->id)) {
+                        continue;
+                    }
+                    $sourceLine = $sale->items->first(fn ($candidate) => $candidate->item?->item_code === $line->item?->item_code);
+                    $expected = (float) ($sourceLine?->quantity ?? $line->quantity);
+                    $movements = StockMovement::where('reference_type', PurchaseBill::class)->where('reference_id', $purchase->id)->where('item_id', $line->item_id)->get();
+                    $missingUnits = $this->missingInterCompanyUnits($line, $movements, (int) $purchase->company_id);
+                    if ($requestedUnitToken) {
+                        $requestedUnitToken = strtolower(trim((string) $requestedUnitToken));
+                        $unitPool = $forceAdd ? collect($line->selected_units ?? []) : collect($missingUnits);
+                        $missingUnits = $unitPool
+                            ->filter(fn ($unit) => is_array($unit) && collect($this->interCompanyUnitTokens($unit))->contains($requestedUnitToken))
+                            ->map(function ($unit) use ($forceAdd, $purchase, $line) {
+                                if (! $forceAdd) {
+                                    return $unit;
+                                }
+
+                                $unit['key'] = 'repair-'.$purchase->id.'-'.$line->id.'-'.str()->uuid();
+                                unset($unit['scope_key']);
+
+                                return $unit;
+                            })
+                            ->values()->all();
+                    }
+                    $hasSerialUnits = collect($line->selected_units ?? [])->contains(fn ($unit) => is_array($unit) && ! empty($this->interCompanyUnitTokens($unit)));
+                    $missing = $hasSerialUnits
+                        ? count($missingUnits)
+                        : round(max(0, $expected - ((float) $movements->where('direction', 'in')->sum('quantity') - (float) $movements->where('direction', 'out')->sum('quantity'))), 3);
+                    if (($missing <= 0 && ! $forceAdd) || ($hasSerialUnits && empty($missingUnits)) || ! $line->item) {
+                        continue;
+                    }
+                    if ($forceAdd) {
+                        $missing = count($missingUnits);
+                    }
+                    $movement = $accounting->moveStock($line->item, [
+                        'party_id' => $purchase->party_id,
+                        'movement_date' => $purchase->billing_date,
+                        'movement_type' => 'inter_company_purchase_repair',
+                        'direction' => 'in',
+                        'quantity' => $missing,
+                        'unit_price' => $line->unit_price,
+                        'total_value' => $missing * (float) $line->unit_price,
+                        'reference_type' => PurchaseBill::class,
+                        'reference_id' => $purchase->id,
+                        'reference_no' => $purchase->invoice_no,
+                        'description' => 'Missing auto inter-company purchase stock repaired from source sale.',
+                        'movement_units' => $missingUnits,
+                        'force' => true,
+                    ]);
+                    if ($movement) {
+                        $repaired++;
+                    }
+                }
+            }
+        });
+
+        $message = $repaired ? "{$repaired} target-company stock item(s) repaired." : 'Target-company stock is already reconciled.';
+
+        if ($request->expectsJson()) {
+            return response()->json(['repaired' => $repaired, 'message' => $message]);
+        }
+
+        return back()->with('success', $message);
+    }
+
+    public function store(Request $request, AccountingService $accounting, EntryVisibilityService $visibility, PartyAdvanceService $advances)
+    {
+        $data = $request->validate([
+            'party_id' => ['nullable', 'exists:parties,id'],
+            'cost_center_id' => ['nullable', 'exists:cost_centers,id'],
+            'sub_cost_center_id' => ['nullable', 'exists:sub_cost_centers,id'],
+            'sale_type' => ['required', 'in:credit,cash'],
+            'invoice_no' => ['nullable', 'max:20'],
+            'billing_date' => ['required', 'date'],
+            'po_date' => ['nullable', 'date'],
+            'reference_no' => ['nullable', 'max:255'],
+            'phone' => ['nullable', 'max:255'],
+            'billing_address' => ['nullable', 'string'],
+            'shipping_address' => ['nullable', 'string'],
+            'discount_amount' => ['nullable', 'numeric', 'min:0'],
+            'notes' => ['nullable', 'string'],
+            'terms' => ['nullable', 'string'],
+            'attachment' => ['nullable', 'file', 'max:4096'],
+            'item_id' => ['required', 'array'],
+            'item_id.*' => ['required', 'exists:items,id'],
+            'quantity.*' => ['required', 'numeric', 'min:0.001'],
+            'unit_price.*' => ['required', 'numeric', 'min:0'],
+            'tax_mode.*' => ['nullable', 'in:with_gst,without_gst'],
+            'tax_percent.*' => ['nullable', 'numeric', 'min:0'],
+            'selected_units.*' => ['nullable', 'string'],
+            'inter_company_transfer' => ['nullable', 'boolean'],
+            'target_company_ids' => ['nullable', 'array'],
+            'target_company_ids.*' => ['integer'],
+            'purchase_visible_to_roles' => ['nullable', 'array'],
+            'purchase_visible_to_users' => ['nullable', 'array'],
+            'advance_applications' => ['nullable', 'array'],
+            'advance_applications.*.party_advance_id' => ['required_with:advance_applications', 'integer'],
+            'advance_applications.*.amount' => ['required_with:advance_applications', 'numeric', 'min:0.01'],
+        ]);
+
+        DB::transaction(function () use ($request, $data, $accounting, $visibility, $advances) {
+            $attachment = $request->hasFile('attachment')
+                ? $request->file('attachment')->store('sales-attachments', 'public')
+                : null;
+            $invoice = SalesInvoice::create(array_merge($data, [
+                'company_id' => auth()->user()->current_company_id,
+                'invoice_no' => $data['invoice_no'] ?: $this->nextNo(),
+                'attachment' => $attachment,
+                'created_by' => auth()->id(),
+                'inter_company_transfer' => $request->boolean('inter_company_transfer'),
+                'inter_company_target_company_ids' => $request->boolean('inter_company_transfer') ? $this->validatedTargetCompanyIds($request, auth()->user()->current_company_id) : null,
+            ]));
+            $totals = $this->storeLines($request, $invoice, $accounting);
+            $invoice->update($totals);
+
+            if ($invoice->sale_type === 'credit' && $invoice->party_id) {
+                $accounting->postPartyLedger($invoice->party, [
+                    'entry_date' => $invoice->billing_date,
+                    'entry_type' => 'sale',
+                    'reference_type' => SalesInvoice::class,
+                    'reference_id' => $invoice->id,
+                    'reference_no' => $invoice->invoice_no,
+                    'debit' => $invoice->grand_total,
+                    'credit' => 0,
+                    'description' => 'Sales invoice receivable.',
+                ]);
+            }
+
+            if ($invoice->party_id) {
+                $advances->applyForDocument(
+                    (int) $invoice->party_id,
+                    'in',
+                    SalesInvoice::class,
+                    $invoice->id,
+                    $invoice->invoice_no,
+                    $request->input('advance_applications', [])
+                );
+            }
+
+            $visibility->syncFromRequest($request, $invoice);
+
+            if ($invoice->inter_company_transfer) {
+                $this->createInterCompanyPurchases($invoice->fresh(['items.item', 'party']), $accounting, $request);
+            }
+        });
+
+        return redirect()->route('admin.sales.index')->with('success', 'Sales invoice posted with stock and party ledger.');
+    }
+
+    public function update(Request $request, SalesInvoice $sale, AccountingService $accounting, EntryVisibilityService $visibility, PartyAdvanceService $advances)
+    {
+        $visibility->authorizeView($sale);
+        $data = $this->validated($request);
+
+        DB::transaction(function () use ($request, $data, $sale, $accounting, $visibility, $advances) {
+            $sale->load('items.item');
+            $oldValues = $sale->replicate()->toArray();
+            $oldValues['items'] = $sale->items->toArray();
+
+            $originalItemQtys = $sale->items
+                ->groupBy('item_id')
+                ->map(fn ($lines) => (float) $lines->sum('quantity'))
+                ->all();
+            $originalUnitsByItem = $sale->items
+                ->groupBy('item_id')
+                ->map(fn ($lines) => $lines
+                    ->flatMap(fn ($line) => $line->selected_units ?? [])
+                    ->filter(fn ($unit) => is_array($unit))
+                    ->unique('key')
+                    ->values()
+                    ->all())
+                ->all();
+
+            $linesChanged = $this->lineSignature($sale->items->toArray()) !== $this->requestLineSignature($request);
+            $serialOnlyChange = $linesChanged
+                && $this->lineSignature($sale->items->toArray(), false) === $this->requestLineSignature($request, false);
+            $headerChanged = $this->salesHeaderChanged($sale, $data);
+            $oldInterCompanyTransfer = (bool) $sale->inter_company_transfer;
+            $oldTargetIds = array_map('intval', $sale->inter_company_target_company_ids ?? []);
+            sort($oldTargetIds);
+            $newInterCompanyTransfer = $request->boolean('inter_company_transfer');
+            $newTargetIds = $newInterCompanyTransfer ? $this->validatedTargetCompanyIds($request, $sale->company_id) : [];
+            sort($newTargetIds);
+            $interCompanyChanged = $oldInterCompanyTransfer !== $newInterCompanyTransfer || $oldTargetIds !== $newTargetIds;
+            $repostStock = $linesChanged && ! $serialOnlyChange;
+            $repostLedger = $repostStock || $headerChanged;
+
+            if ($repostLedger) {
+                $advances->releaseForDocument(SalesInvoice::class, $sale->id);
+                $this->reverseSaleLedger($sale, $accounting);
+            }
+
+            if ($repostStock) {
+                $this->reverseSaleStock($sale, $accounting);
+            }
+
+            $attachment = $sale->attachment;
+            if ($request->hasFile('attachment')) {
+                $attachment = $request->file('attachment')->store('sales-attachments', 'public');
+            }
+
+            if ($repostStock) {
+                $sale->items()->delete();
+            }
+
+            $sale->update(array_merge($data, [
+                'invoice_no' => $data['invoice_no'] ?: $sale->invoice_no,
+                'attachment' => $attachment,
+                'inter_company_transfer' => $newInterCompanyTransfer,
+                'inter_company_target_company_ids' => $newInterCompanyTransfer ? $newTargetIds : null,
+            ]));
+
+            if ($repostStock) {
+                $unitPool = $this->finishedGoodsUnitPool($sale->company_id, $sale->id);
+                $totals = $this->storeLines(
+                    $request,
+                    $sale,
+                    $accounting,
+                    $unitPool,
+                    $originalItemQtys,
+                    $originalUnitsByItem
+                );
+                $sale->update($totals);
+            } elseif ($serialOnlyChange) {
+                $this->syncSerialOnlyChanges($request, $sale, $accounting);
+            }
+
+            if (! $repostStock) {
+                $lineDiscount = (float) $sale->items->sum('discount_amount');
+                $overallDiscount = (float) ($request->discount_amount ?? 0);
+                $tax = (float) $sale->items->sum('tax_amount');
+                $lineTotal = (float) $sale->items->sum('line_total');
+                $sale->update([
+                    'subtotal' => $lineTotal - $tax,
+                    'tax_amount' => $tax,
+                    'discount_amount' => $lineDiscount + $overallDiscount,
+                    'grand_total' => max(0, $lineTotal - $overallDiscount),
+                ]);
+            }
+
+            if ($repostLedger && $sale->sale_type === 'credit' && $sale->party_id) {
+                $accounting->postPartyLedger($sale->party, [
+                    'entry_date' => $sale->billing_date,
+                    'entry_type' => 'sale',
+                    'reference_type' => SalesInvoice::class,
+                    'reference_id' => $sale->id,
+                    'reference_no' => $sale->invoice_no,
+                    'debit' => $sale->grand_total,
+                    'credit' => 0,
+                    'description' => 'Sales invoice receivable updated.',
+                ]);
+            }
+
+            if ($sale->party_id && $repostLedger) {
+                $advanceTotal = round((float) collect($request->input('advance_applications', []))->sum(fn ($row) => (float) ($row['amount'] ?? 0)), 2);
+                abort_if($advanceTotal > (float) $sale->grand_total + 0.01, 422, 'Advance settlement cannot exceed invoice total.');
+                $advances->applyForDocument(
+                    (int) $sale->party_id,
+                    'in',
+                    SalesInvoice::class,
+                    $sale->id,
+                    $sale->invoice_no,
+                    $request->input('advance_applications', [])
+                );
+            }
+
+            $visibility->syncFromRequest($request, $sale);
+            if ($sale->inter_company_transfer) {
+                $this->createInterCompanyPurchases($sale->fresh(['items.item', 'party']), $accounting, $request);
+            } elseif ($interCompanyChanged) {
+                $this->removeInterCompanyPurchases($sale, $accounting);
+            }
+            $this->logUpdate($sale, $oldValues, $sale->fresh('items')->toArray());
+        });
+
+        return redirect()->route('admin.sales.show', $sale)->with('success', 'Sales invoice updated.');
+    }
+
+    public function show(SalesInvoice $sale, EntryVisibilityService $visibility)
+    {
+        $visibility->authorizeView($sale);
+        $sale->load(['party', 'items.item', 'creditNotes', 'sourceDeliveryChallan', 'sourcePendingOrder']);
+        $auditLogs = AuditLog::with(['user', 'company'])
+            ->where('model', SalesInvoice::class)
+            ->where('model_id', $sale->id)
+            ->latest('created_at')
+            ->get();
+
+        return view('admin.sales.show', [
+            'invoice' => $sale,
+            'auditLogs' => $auditLogs,
+            'creditNotes' => $sale->creditNotes,
+        ]);
+    }
+
+    public function print(SalesInvoice $sale, EntryVisibilityService $visibility)
+    {
+        $visibility->authorizeView($sale);
+        $sale->load(['party', 'items.item', 'company', 'creditNotes']);
+        $bankAccount = BankAccount::where('company_id', $sale->company_id)->where('print_on_invoice', true)->where('status', 'active')->first();
+        $defaultTerms = TermsTemplate::where('company_id', $sale->company_id)->where('status', 'active')->whereIn('document_type', ['sales', 'all'])->orderByDesc('is_default')->first();
+
+        return view('admin.sales.print', [
+            'invoice' => $sale,
+            'bankAccount' => $bankAccount,
+            'company' => $sale->company,
+            'defaultTerms' => $defaultTerms,
+            'creditNotes' => $sale->creditNotes,
+        ]);
+    }
+
+    public function detailPdf(SalesInvoice $sale, EntryVisibilityService $visibility, SalesProfitService $profits)
+    {
+        $visibility->authorizeView($sale);
+        $sale->load(['party', 'items.item.bomMaterials.rawItem', 'company']);
+
+        return view('admin.sales.detail-pdf', [
+            'invoice' => $sale,
+            'company' => $sale->company,
+            'detail' => $profits->invoiceDetail($sale),
+        ]);
+    }
+
+    public function interCompanyStockStatusJson(SalesInvoice $sale, EntryVisibilityService $visibility)
+    {
+        $visibility->authorizeView($sale);
+
+        return response()->json($this->interCompanyStockStatus($sale));
+    }
+
+    private function interCompanyStockStatus(SalesInvoice $invoice)
+    {
+        if (! $invoice->inter_company_transfer) {
+            return collect();
+        }
+        $invoice->loadMissing(['items.item']);
+
+        return collect(array_map('intval', $invoice->inter_company_target_company_ids ?? []))->map(function (int $targetCompanyId) use ($invoice) {
+            $company = Company::find($targetCompanyId);
+            $purchase = PurchaseBill::with(['items.item'])->where('company_id', $targetCompanyId)->where('source_sales_invoice_id', $invoice->id)->first();
+            $missing = 0;
+            $details = [];
+            if (! $purchase) {
+                $missing = (float) $invoice->items->sum('quantity');
+            } else {
+                foreach ($purchase->items as $line) {
+                    $movements = StockMovement::where('reference_type', PurchaseBill::class)->where('reference_id', $purchase->id)->where('item_id', $line->item_id)->get();
+                    $sourceLine = $invoice->items->first(fn ($candidate) => $candidate->item?->item_code === $line->item?->item_code);
+                    $missingUnits = $this->missingInterCompanyUnits($line, $movements, $targetCompanyId);
+                    $expected = (float) ($sourceLine?->quantity ?? $line->quantity);
+                    $hasSerialUnits = collect($line->selected_units ?? [])->contains(fn ($unit) => is_array($unit) && ! empty($this->interCompanyUnitTokens($unit)));
+                    $missing += $hasSerialUnits
+                        ? count($missingUnits)
+                        : max(0, $expected - ((float) $movements->where('direction', 'in')->sum('quantity') - (float) $movements->where('direction', 'out')->sum('quantity')));
+
+                    $activeUnits = app(SerialUnitService::class)->currentStockUnitsByItem($targetCompanyId, (int) $line->item_id)[$line->item_id] ?? [];
+                    $movementUnits = collect($movements)->flatMap(fn ($movement) => $movement->movement_units ?? []);
+                    foreach (collect($line->selected_units ?? [])->filter(fn ($unit) => is_array($unit))->values() as $unit) {
+                        $tokens = collect($this->interCompanyUnitTokens($unit));
+                        $active = collect($activeUnits)->first(fn ($candidate) => $tokens->intersect($this->interCompanyUnitTokens($candidate))->isNotEmpty());
+                        $everMoved = $movementUnits->contains(fn ($candidate) => is_array($candidate) && $tokens->intersect($this->interCompanyUnitTokens($candidate))->isNotEmpty());
+                        $audit = $this->interCompanyUnitAudit($line, $unit, $targetCompanyId);
+                        $details[] = [
+                            'line_id' => $line->id,
+                            'item' => $line->item?->name ?: 'Unknown item',
+                            'status' => $active ? 'added' : 'missing',
+                            'reason' => $active ? 'Active stock balance found.' : ($everMoved ? 'Movement exists, but this serial is currently out/reversed in target stock.' : 'No matching inbound stock movement found.'),
+                            'serial_no' => $unit['serial_no'] ?? null,
+                            'sku' => $unit['sku'] ?? null,
+                            'vts_sim' => $unit['vts_sim'] ?? null,
+                            'buyer_code' => $unit['buyer_code'] ?? null,
+                            'key' => $unit['key'] ?? null,
+                            'unit_token' => $this->interCompanyUnitTokens($unit)[0] ?? null,
+                            'last_movement' => $active['last_movement_type'] ?? null,
+                            'locations' => $audit['locations'],
+                            'history' => $audit['history'],
+                        ];
+                    }
+                }
+            }
+
+            return ['company_id' => $targetCompanyId, 'company' => $company?->name ?: 'Target company', 'purchase' => $purchase?->invoice_no, 'missing' => round($missing, 3), 'details' => $details ?? []];
+        })->values();
+    }
+
+    private function missingInterCompanyUnits(PurchaseBillItem $line, $movements, ?int $companyId = null): array
+    {
+        if ($companyId) {
+            $serialUnits = app(SerialUnitService::class);
+            $activeIdentities = collect($serialUnits->currentStockUnitsByItem($companyId, (int) $line->item_id)[$line->item_id] ?? [])
+                ->flatMap(fn ($unit) => $this->interCompanyUnitTokens($unit))
+                ->filter()->flip();
+
+            return collect($line->selected_units ?? [])->filter(fn ($unit) => is_array($unit))
+                ->reject(fn ($unit) => collect($this->interCompanyUnitTokens($unit))->contains(fn ($token) => $activeIdentities->has($token)))
+                ->values()->all();
+        }
+
+        $incoming = $movements->where('direction', 'in')
+            ->flatMap(fn ($movement) => collect($movement->movement_units ?? [])->flatMap(fn ($unit) => is_array($unit) ? $this->interCompanyUnitTokens($unit) : []))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        return collect($line->selected_units ?? [])->filter(fn ($unit) => is_array($unit))->reject(function ($unit) use ($incoming) {
+            return collect($this->interCompanyUnitTokens($unit))->contains(fn ($token) => in_array($token, $incoming, true));
+        })->values()->all();
+    }
+
+    private function interCompanyUnitTokens(array $unit): array
+    {
+        $tokens = collect(['key', 'serial_no', 'vts_sim'])
+            ->map(fn ($field) => ! empty($unit[$field]) ? strtolower(trim((string) $unit[$field])) : null)
+            ->filter()->unique()->values()->all();
+
+        // Buyer codes are shared by many units and cannot identify stock. SKU is
+        // only a fallback because some imports use it as a per-unit identifier.
+        if (empty($tokens) && ! empty($unit['sku'])) {
+            $tokens[] = strtolower(trim((string) $unit['sku']));
+        }
+
+        return $tokens;
+    }
+
+    private function interCompanyUnitAudit(PurchaseBillItem $line, array $unit, int $targetCompanyId): array
+    {
+        $tokens = collect($this->interCompanyUnitTokens($unit));
+        $itemIds = Item::query()
+            ->when($line->item?->item_code, fn ($query) => $query->where('item_code', $line->item->item_code), fn ($query) => $query->whereKey($line->item_id))
+            ->pluck('id');
+        $serials = app(SerialUnitService::class);
+        $movements = StockMovement::with('item')->whereIn('item_id', $itemIds)->orderByDesc('id')->get();
+        $matched = $movements->filter(function ($movement) use ($serials, $tokens) {
+            return collect($serials->movementUnits($movement))->contains(fn ($candidate) => is_array($candidate) && $tokens->intersect($this->interCompanyUnitTokens($candidate))->isNotEmpty());
+        });
+        $locations = $matched->groupBy('company_id')->map(function ($rows, $companyId) {
+            $net = (float) $rows->where('direction', 'in')->sum('quantity') - (float) $rows->where('direction', 'out')->sum('quantity');
+
+            return ['company' => Company::find($companyId)?->name ?: 'Company '.$companyId, 'net' => round($net, 3)];
+        })->filter(fn ($row) => $row['net'] > 0)->values()->all();
+        $history = $matched->take(8)->map(fn ($movement) => [
+            'company' => Company::find($movement->company_id)?->name ?: 'Company '.$movement->company_id,
+            'type' => $movement->movement_type,
+            'direction' => $movement->direction,
+            'date' => $movement->movement_date?->format('d M Y'),
+            'reference' => $movement->reference_no,
+            'by' => $movement->creator?->name,
+        ])->values()->all();
+
+        return ['locations' => $locations, 'history' => $history];
+    }
+
+    private function formData(?SalesInvoice $invoice = null): array
+    {
+        $companyId = auth()->user()->current_company_id;
+        $items = Item::where('company_id', $companyId)
+            ->where('status', 'active')
+            ->whereHas('productType', fn ($q) => $q->where('nature', 'finished_goods'))
+            ->orderBy('name')
+            ->get();
+
+        $mergedCompanies = Company::whereIn('id', CompanyMerge::getMergedCompanyIds($companyId))
+            ->where('is_active', true)
+            ->orderBy('name')
+            ->get(['id', 'name', 'phone', 'gst_number']);
+
+        return [
+            'parties' => Party::where('company_id', $companyId)->orderBy('display_name')->get(),
+            'items' => $items,
+            'costCenters' => CostCenter::where('company_id', $companyId)->where('status', 'active')->get(),
+            'subCostCenters' => SubCostCenter::where('company_id', $companyId)->where('status', 'active')->get(),
+            'invoiceNo' => $invoice?->invoice_no ?? $this->nextNo(),
+            'unitPool' => $this->finishedGoodsUnitPool($companyId, $invoice?->id),
+            'itemMeta' => $items->mapWithKeys(fn (Item $item) => [
+                $item->id => ['requires_gps' => $this->isGpsItem($item), 'weight' => (float) ($item->per_quantity_weight ?? 0)],
+            ])->all(),
+            'mergedCompanies' => $mergedCompanies,
+            'interCompanyVisibility' => $this->interCompanyVisibilityData($mergedCompanies),
+            'interCompanySelectedVisibility' => $this->interCompanySelectedVisibility($invoice),
+            'termsTemplates' => TermsTemplate::where('company_id', $companyId)
+                ->where('status', 'active')
+                ->whereIn('document_type', ['all', 'sales'])
+                ->orderByDesc('is_default')
+                ->orderBy('title')
+                ->get(),
+        ];
+    }
+
+    private function validated(Request $request): array
+    {
+        return $request->validate([
+            'party_id' => ['nullable', 'exists:parties,id'],
+            'cost_center_id' => ['nullable', 'exists:cost_centers,id'],
+            'sub_cost_center_id' => ['nullable', 'exists:sub_cost_centers,id'],
+            'sale_type' => ['required', 'in:credit,cash'],
+            'invoice_no' => ['nullable', 'max:20'],
+            'billing_date' => ['required', 'date'],
+            'po_date' => ['nullable', 'date'],
+            'reference_no' => ['nullable', 'max:255'],
+            'phone' => ['nullable', 'max:255'],
+            'billing_address' => ['nullable', 'string'],
+            'shipping_address' => ['nullable', 'string'],
+            'discount_amount' => ['nullable', 'numeric', 'min:0'],
+            'notes' => ['nullable', 'string'],
+            'terms' => ['nullable', 'string'],
+            'attachment' => ['nullable', 'file', 'max:4096'],
+            'item_id' => ['required', 'array'],
+            'item_id.*' => ['required', 'exists:items,id'],
+            'quantity.*' => ['required', 'numeric', 'min:0.001'],
+            'unit_price.*' => ['required', 'numeric', 'min:0'],
+            'tax_mode.*' => ['nullable', 'in:with_gst,without_gst'],
+            'tax_percent.*' => ['nullable', 'numeric', 'min:0'],
+            'selected_units.*' => ['nullable', 'string'],
+            'inter_company_transfer' => ['nullable', 'boolean'],
+            'target_company_ids' => ['nullable', 'array'],
+            'target_company_ids.*' => ['integer'],
+            'purchase_visible_to_roles' => ['nullable', 'array'],
+            'purchase_visible_to_users' => ['nullable', 'array'],
+            'advance_applications' => ['nullable', 'array'],
+            'advance_applications.*.party_advance_id' => ['required_with:advance_applications', 'integer'],
+            'advance_applications.*.amount' => ['required_with:advance_applications', 'numeric', 'min:0.01'],
+        ]);
+    }
+
+    private function storeLines(
+        Request $request,
+        SalesInvoice $invoice,
+        AccountingService $accounting,
+        ?array $unitPool = null,
+        array $originalItemQtys = [],
+        array $originalUnitsByItem = []
+    ): array {
+        $subtotal = $tax = $lineDiscount = $totalWeight = 0;
+        $unitPool ??= $this->finishedGoodsUnitPool($invoice->company_id, $invoice->id);
+
+        foreach ($request->item_id as $i => $itemId) {
+            $item = Item::with('productType')->findOrFail($itemId);
+            $qty = (float) $request->quantity[$i];
+            $originalKeysForItem = collect($originalUnitsByItem[$item->id] ?? [])->pluck('key')->filter()->all();
+            if ($originalKeysForItem && isset($unitPool[$item->id])) {
+                foreach ($unitPool[$item->id] as &$poolUnit) {
+                    if (in_array($poolUnit['key'] ?? null, $originalKeysForItem, true)) {
+                        $poolUnit['sold'] = false;
+                    }
+                }
+                unset($poolUnit);
+            }
+
+            // ✅ FIX: reversal se jo stock wapas aaya use bhi effective stock mein count karo
+            $reversedQty = (float) ($originalItemQtys[$item->id] ?? 0);
+            $effectiveStock = (float) $item->current_stock + $reversedQty;
+
+            abort_if($item->track_stock && $effectiveStock < $qty, 422, "Insufficient stock for {$item->name}");
+            abort_if($item->productType?->nature !== 'finished_goods', 422, 'Only finished goods can be sold from Sales.');
+            abort_if((float) ((int) $qty) !== $qty, 422, "Quantity must be a whole number for {$item->name}.");
+
+            $requestedUnits = $this->decodeSelectedUnits($request->selected_units[$i] ?? null);
+            if (count($requestedUnits) < (int) $qty && isset($originalUnitsByItem[$item->id])) {
+                $requestedUnits = collect($requestedUnits)
+                    ->concat($originalUnitsByItem[$item->id])
+                    ->unique('key')
+                    ->values()
+                    ->all();
+            }
+
+            $selectedUnits = $this->reconcileSelectedUnits(
+                $requestedUnits,
+                $unitPool[$item->id] ?? [],
+                (int) $qty,
+                $this->isGpsItem($item)
+            );
+            abort_if($this->isGpsItem($item) && collect($selectedUnits)->contains(fn ($unit) => empty($unit['vts_sim'])), 422, "VTS/SIM number is required for selected GPS units of {$item->name}.");
+            $selectedKeys = collect($selectedUnits)->pluck('key')->filter()->values()->all();
+            abort_if(count($selectedKeys) !== (int) $qty, 422, 'Only '.count($selectedKeys)." available finished goods unit(s) found for {$item->name}; {$qty} required.");
+            $availableKeys = collect($unitPool[$item->id] ?? [])
+                ->filter(fn ($unit) => empty($unit['sold']) || in_array($unit['key'] ?? null, $originalKeysForItem, true))
+                ->pluck('key')
+                ->all();
+            abort_if(count(array_diff($selectedKeys, $availableKeys)) > 0, 422, "One or more selected units for {$item->name} are already sold or invalid.");
+
+            // Reserve units in memory so two lines of the same invoice cannot use
+            // the same serial/batch unit.
+            if (isset($unitPool[$item->id])) {
+                foreach ($unitPool[$item->id] as &$poolUnit) {
+                    if (in_array($poolUnit['key'], $selectedKeys, true)) {
+                        $poolUnit['sold'] = true;
+                    }
+                }
+                unset($poolUnit);
+            }
+
+            $price = (float) $request->unit_price[$i];
+            $base = $qty * $price;
+            $discount = (($request->discount_type[$i] ?? 'percent') === 'flat') ? (float) ($request->discount_value[$i] ?? 0) : $base * (float) ($request->discount_value[$i] ?? 0) / 100;
+            $taxMode = $request->tax_mode[$i] ?? 'with_gst';
+            $taxPercent = $taxMode === 'with_gst' ? (float) ($request->tax_percent[$i] ?? 18) : 0;
+            $grossAfterDiscount = max(0, $base - $discount);
+            $taxAmount = $taxPercent > 0 ? $grossAfterDiscount * $taxPercent / (100 + $taxPercent) : 0;
+            $taxableAmount = $grossAfterDiscount - $taxAmount;
+            $total = $grossAfterDiscount;
+            $lineWeight = $qty * (float) ($item->per_quantity_weight ?? 0);
+
+            SalesInvoiceItem::create([
+                'sales_invoice_id' => $invoice->id,
+                'item_id' => $item->id,
+                'description' => $request->description[$i] ?? $item->description,
+                'quantity' => $qty,
+                'unit' => $request->unit[$i] ?? $item->unit,
+                'unit_price' => $price,
+                'discount_type' => $request->discount_type[$i] ?? 'percent',
+                'discount_value' => $request->discount_value[$i] ?? 0,
+                'discount_amount' => $discount,
+                'tax_percent' => $taxPercent,
+                'tax_amount' => $taxAmount,
+                'line_total' => $total,
+                'line_weight' => $lineWeight,
+                'selected_units' => $selectedUnits,
+            ]);
+
+            $accounting->moveStock($item, [
+                'party_id' => $invoice->party_id,
+                'movement_date' => $invoice->billing_date,
+                'movement_type' => 'sale',
+                'direction' => 'out',
+                'quantity' => $qty,
+                'unit_price' => $item->purchase_price,
+                'total_value' => $qty * (float) $item->purchase_price,
+                'reference_type' => SalesInvoice::class,
+                'reference_id' => $invoice->id,
+                'reference_no' => $invoice->invoice_no,
+                'description' => 'Sales stock out.',
+                'movement_units' => $selectedUnits,
+            ]);
+
+            $subtotal += $taxableAmount;
+            $tax += $taxAmount;
+            $lineDiscount += $discount;
+            $totalWeight += $lineWeight;
+        }
+
+        $overallDiscount = (float) ($request->discount_amount ?? 0);
+
+        return [
+            'subtotal' => $subtotal,
+            'discount_amount' => $lineDiscount + $overallDiscount,
+            'tax_amount' => $tax,
+            'grand_total' => max(0, $subtotal + $tax - $overallDiscount),
+            'total_weight' => $totalWeight,
+        ];
+    }
+
+    private function syncSerialOnlyChanges(
+        Request $request,
+        SalesInvoice $invoice,
+        AccountingService $accounting
+    ): void {
+        $unitPool = $this->finishedGoodsUnitPool($invoice->company_id, $invoice->id);
+        $lines = $invoice->items->values();
+        $selectedScopeKeys = [];
+        $serials = app(SerialUnitService::class);
+
+        foreach ((array) $request->input('item_id', []) as $index => $itemId) {
+            $line = $lines->get($index);
+            abort_if(! $line || (int) $line->item_id !== (int) $itemId, 422, 'Invoice items changed. Please reload and try again.');
+
+            $item = $line->item ?? Item::findOrFail($line->item_id);
+            $quantity = (int) $line->quantity;
+            $requestedUnits = $this->decodeSelectedUnits($request->input("selected_units.$index"));
+            $selectedUnits = $this->reconcileSelectedUnits(
+                $requestedUnits,
+                $unitPool[$item->id] ?? [],
+                $quantity,
+                $this->isGpsItem($item)
+            );
+
+            abort_if(count($selectedUnits) !== $quantity, 422, 'Only '.count($selectedUnits)." available finished goods unit(s) found for {$item->name}; {$quantity} required.");
+            abort_if(
+                $this->isGpsItem($item) && collect($selectedUnits)->contains(fn ($unit) => empty($unit['vts_sim'])),
+                422,
+                "VTS/SIM number is required for selected GPS units of {$item->name}."
+            );
+
+            foreach ($selectedUnits as $unit) {
+                $scopeKey = $serials->scopeUnitKey((int) $item->id, $unit);
+                abort_if($scopeKey && in_array($scopeKey, $selectedScopeKeys, true), 422, "The same serial unit cannot be selected twice for {$item->name}.");
+                if ($scopeKey) {
+                    $selectedScopeKeys[] = $scopeKey;
+                }
+            }
+
+            $oldUnits = collect($line->selected_units ?? [])->filter(fn ($unit) => is_array($unit));
+            $newUnits = collect($selectedUnits);
+            if ($this->selectedUnitSignature($oldUnits->all()) === $this->selectedUnitSignature($newUnits->all())) {
+                continue;
+            }
+
+            $oldKeys = $oldUnits->pluck('key')->filter()->all();
+            $newKeys = $newUnits->pluck('key')->filter()->all();
+            $releasedUnits = $oldUnits->reject(fn ($unit) => in_array($unit['key'] ?? null, $newKeys, true))->values()->all();
+            $issuedUnits = $newUnits->reject(fn ($unit) => in_array($unit['key'] ?? null, $oldKeys, true))->values()->all();
+
+            foreach ([['in', $releasedUnits], ['out', $issuedUnits]] as [$direction, $units]) {
+                if (empty($units)) {
+                    continue;
+                }
+
+                $accounting->moveStock($item, [
+                    'party_id' => $invoice->party_id,
+                    'movement_date' => $invoice->billing_date,
+                    'movement_type' => 'sale_serial_change',
+                    'direction' => $direction,
+                    'quantity' => 0,
+                    'unit_price' => 0,
+                    'total_value' => 0,
+                    'reference_type' => SalesInvoice::class,
+                    'reference_id' => $invoice->id,
+                    'reference_no' => $invoice->invoice_no,
+                    'description' => $direction === 'in'
+                        ? 'Previous sales serial released after invoice edit.'
+                        : 'Replacement sales serial issued after invoice edit.',
+                    'movement_units' => $units,
+                    'force' => true,
+                ]);
+            }
+
+            $line->update(['selected_units' => $selectedUnits]);
+        }
+    }
+
+    private function reverseSalePosting(SalesInvoice $invoice, AccountingService $accounting): void
+    {
+        foreach ($invoice->items as $line) {
+            if (! $line->item) {
+                continue;
+            }
+
+            $accounting->moveStock($line->item, [
+                'party_id' => $invoice->party_id,
+                'movement_date' => now()->toDateString(),
+                'movement_type' => 'sale_reversal',
+                'direction' => 'in',
+                'quantity' => (float) $line->quantity,
+                'unit_price' => $line->item->purchase_price,
+                'total_value' => (float) $line->quantity * (float) $line->item->purchase_price,
+                'reference_type' => SalesInvoice::class,
+                'reference_id' => $invoice->id,
+                'reference_no' => $invoice->invoice_no,
+                'description' => 'Sales stock reversal before update.',
+                'movement_units' => $line->selected_units ?? [],
+            ]);
+        }
+
+        if ($invoice->sale_type === 'credit' && $invoice->party_id) {
+            $accounting->postPartyLedger($invoice->party, [
+                'entry_date' => now()->toDateString(),
+                'entry_type' => 'sale_reversal',
+                'reference_type' => SalesInvoice::class,
+                'reference_id' => $invoice->id,
+                'reference_no' => $invoice->invoice_no,
+                'debit' => 0,
+                'credit' => $invoice->grand_total,
+                'description' => 'Sales ledger reversal before update.',
+            ]);
+        }
+    }
+
+    private function reverseSaleStock(SalesInvoice $invoice, AccountingService $accounting): void
+    {
+        foreach ($invoice->items as $line) {
+            $item = $line->item ?? Item::findOrFail($line->item_id);
+
+            $accounting->moveStock($item, [
+                'party_id' => $invoice->party_id,
+                'movement_date' => now()->toDateString(),
+                'movement_type' => 'sale_reversal',
+                'direction' => 'in',
+                'quantity' => (float) $line->quantity,
+                'unit_price' => $item->purchase_price,
+                'total_value' => (float) $line->quantity * (float) $item->purchase_price,
+                'reference_type' => SalesInvoice::class,
+                'reference_id' => $invoice->id,
+                'reference_no' => $invoice->invoice_no,
+                'description' => 'Sales stock reversal before update.',
+                'movement_units' => $line->selected_units ?? [],
+            ]);
+        }
+    }
+
+    private function reverseSaleLedger(SalesInvoice $invoice, AccountingService $accounting): void
+    {
+        if ($invoice->sale_type === 'credit' && $invoice->party_id) {
+            $accounting->postPartyLedger($invoice->party, [
+                'entry_date' => now()->toDateString(),
+                'entry_type' => 'sale_reversal',
+                'reference_type' => SalesInvoice::class,
+                'reference_id' => $invoice->id,
+                'reference_no' => $invoice->invoice_no,
+                'debit' => 0,
+                'credit' => $invoice->grand_total,
+                'description' => 'Sales ledger reversal before update.',
+            ]);
+        }
+    }
+
+    private function salesHeaderChanged(SalesInvoice $sale, array $data): bool
+    {
+        $lineDiscount = (float) $sale->items->sum('discount_amount');
+        $currentOverallDiscount = max(0, (float) $sale->discount_amount - $lineDiscount);
+
+        return (string) $sale->sale_type !== (string) ($data['sale_type'] ?? $sale->sale_type)
+            || (int) $sale->party_id !== (int) ($data['party_id'] ?? $sale->party_id)
+            || (string) $sale->billing_date?->toDateString() !== (string) ($data['billing_date'] ?? $sale->billing_date?->toDateString())
+            || round((float) $sale->grand_total, 2) !== round(max(0, (float) $sale->items->sum('line_total') - (float) ($data['discount_amount'] ?? 0)), 2)
+            || round($currentOverallDiscount, 2) !== round((float) ($data['discount_amount'] ?? 0), 2);
+    }
+
+    private function requestLineSignature(Request $request, bool $includeSelectedUnits = true): string
+    {
+        $payload = [];
+        foreach ((array) $request->input('item_id', []) as $i => $itemId) {
+            $line = [
+                'item_id' => (int) $itemId,
+                'quantity' => (float) ($request->input("quantity.$i") ?? 0),
+                'unit_price' => (float) ($request->input("unit_price.$i") ?? 0),
+                'discount_type' => (string) ($request->input("discount_type.$i") ?? 'percent'),
+                'discount_value' => (float) ($request->input("discount_value.$i") ?? 0),
+                'tax_mode' => (string) ($request->input("tax_mode.$i") ?? 'with_gst'),
+                'tax_percent' => (float) ($request->input("tax_percent.$i") ?? 0),
+            ];
+            if ($includeSelectedUnits) {
+                $line['selected_units'] = $this->selectedUnitSignature(
+                    $this->decodeSelectedUnits($request->input("selected_units.$i"))
+                );
+            }
+            $payload[] = $line;
+        }
+
+        return md5(json_encode($payload));
+    }
+
+    private function lineSignature(array $lines, bool $includeSelectedUnits = true): string
+    {
+        $payload = collect($lines)->map(function ($line) use ($includeSelectedUnits) {
+            $signature = [
+                'item_id' => (int) ($line['item_id'] ?? 0),
+                'quantity' => (float) ($line['quantity'] ?? 0),
+                'unit_price' => (float) ($line['unit_price'] ?? 0),
+                'discount_type' => (string) ($line['discount_type'] ?? 'percent'),
+                'discount_value' => (float) ($line['discount_value'] ?? 0),
+                'tax_mode' => (float) ($line['tax_percent'] ?? 0) > 0 ? 'with_gst' : 'without_gst',
+                'tax_percent' => (float) ($line['tax_percent'] ?? 0),
+            ];
+            if ($includeSelectedUnits) {
+                $signature['selected_units'] = $this->selectedUnitSignature($line['selected_units'] ?? []);
+            }
+
+            return $signature;
+        })->values()->all();
+
+        return md5(json_encode($payload));
+    }
+
+    private function selectedUnitSignature(array $units): array
+    {
+        return collect($units)
+            ->filter(fn ($unit) => is_array($unit))
+            ->map(fn ($unit) => [
+                'key' => (string) ($unit['key'] ?? ''),
+                'serial_no' => (string) ($unit['serial_no'] ?? ''),
+                'vts_sim' => (string) ($unit['vts_sim'] ?? ''),
+                'buyer_code' => (string) ($unit['buyer_code'] ?? ''),
+                'batch_no' => (string) ($unit['batch_no'] ?? ''),
+                'production_batch_no' => (string) ($unit['production_batch_no'] ?? ''),
+            ])
+            ->sortBy(fn ($unit) => implode('|', $unit))
+            ->values()
+            ->all();
+    }
+
+    private function finishedGoodsUnitPool(int $companyId, ?int $currentInvoiceId = null): array
+    {
+        $serials = app(SerialUnitService::class);
+        $soldKeys = $serials->activeSoldScopedKeys($companyId, $currentInvoiceId);
+        $pool = collect($serials->currentStockUnitsByItem($companyId))
+            ->map(fn (array $rows, int $itemId) => collect($rows)
+                ->map(function (array $unit) use ($serials, $itemId, $soldKeys) {
+                    $scopeKey = $serials->scopeUnitKey($itemId, $unit);
+
+                    return array_merge($unit, [
+                        'scope_key' => $scopeKey,
+                        'sold' => in_array($scopeKey, $soldKeys, true),
+                    ]);
+                })
+                ->values()
+                ->all())
+            ->all();
+
+        if ($currentInvoiceId) {
+            SalesInvoiceItem::with(['salesInvoice', 'item'])
+                ->whereHas('salesInvoice', fn ($query) => $query->where('company_id', $companyId)->whereKey($currentInvoiceId))
+                ->get()
+                ->each(function (SalesInvoiceItem $line) use (&$pool, $serials) {
+                    foreach (($line->selected_units ?? []) as $unit) {
+                        if (! is_array($unit)) {
+                            continue;
+                        }
+
+                        $scopeKey = $serials->scopeUnitKey((int) $line->item_id, $unit);
+                        $pool[$line->item_id] ??= [];
+                        if (collect($pool[$line->item_id])->contains(fn ($row) => ($row['scope_key'] ?? null) === $scopeKey)) {
+                            continue;
+                        }
+
+                        $pool[$line->item_id][] = array_merge($unit, [
+                            'item_id' => $line->item_id,
+                            'item_name' => $line->item?->name,
+                            'scope_key' => $scopeKey,
+                            'sold' => false,
+                        ]);
+                    }
+                });
+        }
+
+        return $pool;
+    }
+
+    private function purchasedFinishedGoodsUnitPool(int $companyId, array $soldKeys): array
+    {
+        return PurchaseBillItem::with(['purchaseBill', 'item.productType'])
+            ->whereHas('purchaseBill', fn ($q) => $q->where('company_id', $companyId))
+            ->whereHas('item.productType', fn ($q) => $q->where('nature', 'finished_goods'))
+            ->get()
+            ->flatMap(function (PurchaseBillItem $line) use ($soldKeys) {
+                return collect($line->selected_units ?? [])->map(function ($unit, $index) use ($line, $soldKeys) {
+                    $key = $unit['key'] ?? 'PBI-'.$line->id.'-'.$index;
+
+                    return array_merge($unit, [
+                        'key' => $key,
+                        'item_id' => $line->item_id,
+                        'item_name' => $line->item?->name,
+                        'production_batch_no' => $unit['production_batch_no'] ?? $line->purchaseBill?->invoice_no,
+                        'production_date' => $line->purchaseBill?->billing_date?->format('Y-m-d'),
+                        'cost_per_unit' => (float) $line->unit_price,
+                        'sold' => in_array($key, $soldKeys, true),
+                    ]);
+                });
+            })
+            ->groupBy('item_id')
+            ->map(fn ($rows) => $rows->values()->all())
+            ->all();
+    }
+
+    private function decodeSelectedUnits(?string $json): array
+    {
+        $units = json_decode($json ?: '[]', true);
+
+        return is_array($units) ? array_values($units) : [];
+    }
+
+    private function normalizeSelectedUnits(array $selectedUnits, array $poolUnits): array
+    {
+        $availablePoolUnits = collect($poolUnits)->where('sold', false)->values();
+
+        return collect($selectedUnits)->map(function (array $selected) use ($availablePoolUnits) {
+            $selectedKey = $selected['key'] ?? null;
+            $poolMatch = $availablePoolUnits->firstWhere('key', $selectedKey);
+            if ($poolMatch) {
+                return $poolMatch;
+            }
+
+            $sameUnit = $availablePoolUnits->first(function ($unit) use ($selected) {
+                foreach (['serial_no', 'vts_sim', 'buyer_code', 'batch_no', 'production_batch_no'] as $field) {
+                    if (! empty($selected[$field]) && ! empty($unit[$field]) && (string) $selected[$field] !== (string) $unit[$field]) {
+                        return false;
+                    }
+                }
+
+                return collect(['serial_no', 'vts_sim', 'buyer_code', 'batch_no', 'production_batch_no'])
+                    ->contains(fn ($field) => ! empty($selected[$field]) && ! empty($unit[$field]));
+            });
+
+            return $sameUnit;
+        })->filter()->unique('key')->values()->all();
+    }
+
+    private function reconcileSelectedUnits(
+        array $selectedUnits,
+        array $poolUnits,
+        int $quantity,
+        bool $requiresGps
+    ): array {
+        $availableUnits = collect($poolUnits)
+            ->where('sold', false)
+            ->when($requiresGps, fn ($units) => $units->filter(fn ($unit) => ! empty($unit['vts_sim'])))
+            ->values();
+
+        $selected = collect($this->normalizeSelectedUnits($selectedUnits, $availableUnits->all()))
+            ->when($requiresGps, fn ($units) => $units->filter(fn ($unit) => ! empty($unit['vts_sim'])))
+            ->take($quantity)
+            ->values();
+
+        if ($selected->count() < $quantity) {
+            $selectedKeys = $selected->pluck('key')->all();
+            $selected = $selected->concat(
+                $availableUnits
+                    ->reject(fn ($unit) => in_array($unit['key'], $selectedKeys, true))
+                    ->take($quantity - $selected->count())
+            );
+        }
+
+        return $selected->take($quantity)->values()->all();
+    }
+
+    private function validatedTargetCompanyIds(Request $request, int $companyId): array
+    {
+        $allowed = CompanyMerge::getMergedCompanyIds($companyId);
+        $selected = array_values(array_unique(array_map('intval', $request->input('target_company_ids', []))));
+        abort_if(empty($selected), 422, 'Select at least one merged company for inter-company sale.');
+        abort_if(count(array_diff($selected, $allowed)) > 0, 422, 'Selected company is not merged with current company.');
+
+        return $selected;
+    }
+
+    private function createInterCompanyPurchases(SalesInvoice $invoice, AccountingService $accounting, Request $request): void
+    {
+        $sourceCompany = Company::findOrFail($invoice->company_id);
+        $targetIds = array_map('intval', $invoice->inter_company_target_company_ids ?? []);
+
+        PurchaseBill::with(['items.item', 'party'])
+            ->where('source_sales_invoice_id', $invoice->id)
+            ->whereNotIn('company_id', $targetIds)
+            ->get()
+            ->each(function (PurchaseBill $purchase) use ($accounting) {
+                $this->reverseInterCompanyPurchase($purchase, $accounting);
+                $purchase->items()->delete();
+                $purchase->delete();
+                EntryVisibility::where('entry_type', PurchaseBill::class)->where('entry_id', $purchase->id)->delete();
+            });
+
+        foreach ($targetIds as $targetCompanyId) {
+            $targetParty = $this->supplierPartyForCompany($targetCompanyId, $sourceCompany);
+            $purchase = PurchaseBill::where('company_id', $targetCompanyId)
+                ->where('source_sales_invoice_id', $invoice->id)
+                ->first();
+
+            $oldValues = null;
+            if ($purchase) {
+                $purchase->load(['items.item', 'party']);
+                $oldValues = $purchase->replicate()->toArray();
+                $oldValues['items'] = $purchase->items->toArray();
+                $this->reverseInterCompanyPurchase($purchase, $accounting);
+                $purchase->items()->delete();
+                $purchase->update($this->interCompanyPurchasePayload($invoice, $sourceCompany, $targetParty));
+            } else {
+                $purchase = PurchaseBill::create($this->interCompanyPurchasePayload($invoice, $sourceCompany, $targetParty, $targetCompanyId));
+            }
+
+            foreach ($invoice->items as $line) {
+                $targetItem = $this->targetItemForSaleLine($line->item, $targetCompanyId);
+                $movementUnits = collect($line->selected_units ?? [])
+                    ->filter(fn ($unit) => is_array($unit))
+                    ->map(function ($unit, $index) use ($targetItem, $line) {
+                        $identity = $unit['key']
+                            ?? $unit['serial_no']
+                            ?? $unit['vts_sim']
+                            ?? $unit['buyer_code']
+                            ?? $unit['sku']
+                            ?? null;
+
+                        return array_merge($unit, [
+                            'key' => $identity ?: 'IC-' . $line->id . '-' . $index,
+                            'item_id' => $targetItem->id,
+                        ]);
+                    })
+                    ->values()
+                    ->all();
+                // The auto purchase is the other side of this inter-company
+                // sale, so it must carry the same commercial values as the
+                // source sale. Using the target/source item's purchase price
+                // here made the purchase total differ from the sale total.
+                $purchaseLine = PurchaseBillItem::create([
+                    'purchase_bill_id' => $purchase->id,
+                    'item_id' => $targetItem->id,
+                    'description' => $line->description,
+                    'quantity' => $line->quantity,
+                    'unit' => $line->unit,
+                    'unit_price' => $line->unit_price,
+                    'discount_type' => $line->discount_type,
+                    'discount_value' => $line->discount_value,
+                    'discount_amount' => $line->discount_amount,
+                    'tax_percent' => $line->tax_percent,
+                    'tax_amount' => $line->tax_amount,
+                    'line_total' => $line->line_total,
+                    'selected_units' => $movementUnits,
+                ]);
+
+                $movement = $accounting->moveStock($targetItem, [
+                    'party_id' => $targetParty->id,
+                    'movement_date' => $purchase->billing_date,
+                    'movement_type' => 'inter_company_purchase',
+                    'direction' => 'in',
+                    'quantity' => (float) $purchaseLine->quantity,
+                    'unit_price' => $purchaseLine->unit_price,
+                    'total_value' => (float) $purchaseLine->line_total,
+                    'reference_type' => PurchaseBill::class,
+                    'reference_id' => $purchase->id,
+                    'reference_no' => $purchase->invoice_no,
+                    'description' => 'Auto purchase stock in from inter-company sale.',
+                    'movement_units' => $movementUnits,
+                ]);
+                $this->syncInterCompanyVisibilityForEntry($request, $targetItem, $targetCompanyId);
+                if ($movement) {
+                    $this->syncInterCompanyVisibilityForEntry($request, $movement, $targetCompanyId);
+                }
+            }
+
+            $purchase->update([
+                'subtotal' => $invoice->subtotal,
+                'discount_amount' => $invoice->discount_amount,
+                'tax_amount' => $invoice->tax_amount,
+                'grand_total' => $invoice->grand_total,
+            ]);
+            $purchase->refresh();
+
+            $accounting->postPartyLedger($targetParty, [
+                'entry_date' => $purchase->billing_date,
+                'entry_type' => 'purchase',
+                'reference_type' => PurchaseBill::class,
+                'reference_id' => $purchase->id,
+                'reference_no' => $purchase->invoice_no,
+                'credit' => $purchase->grand_total,
+                'debit' => 0,
+                'description' => 'Auto inter-company purchase payable.',
+            ]);
+
+            $this->syncPurchaseVisibility($request, $purchase, $targetCompanyId);
+
+            if ($oldValues) {
+                AuditLog::log('updated', [
+                    'company_id' => $purchase->company_id,
+                    'model' => PurchaseBill::class,
+                    'model_id' => $purchase->id,
+                    'old_values' => $oldValues,
+                    'new_values' => $purchase->fresh('items')->toArray(),
+                    'description' => 'Auto inter-company purchase updated from source sale edit by '.(auth()->user()?->name ?? 'System').'.',
+                ]);
+            }
+        }
+    }
+
+    private function removeInterCompanyPurchases(SalesInvoice $invoice, AccountingService $accounting): void
+    {
+        PurchaseBill::with(['items.item', 'party'])
+            ->where('source_sales_invoice_id', $invoice->id)
+            ->get()
+            ->each(function (PurchaseBill $purchase) use ($accounting) {
+                $this->reverseInterCompanyPurchase($purchase, $accounting);
+                $purchase->items()->delete();
+                $purchase->delete();
+                EntryVisibility::where('entry_type', PurchaseBill::class)->where('entry_id', $purchase->id)->delete();
+            });
+    }
+
+    private function interCompanyPurchasePayload(SalesInvoice $invoice, Company $sourceCompany, Party $targetParty, ?int $targetCompanyId = null): array
+    {
+        $payload = [
+            'party_id' => $targetParty->id,
+            'purchase_type' => 'credit',
+            'supplier_bill_no' => $invoice->invoice_no,
+            'billing_date' => $invoice->billing_date,
+            'purchase_bill_date' => $invoice->billing_date,
+            'reference_no' => 'Auto purchase from sale '.$invoice->invoice_no,
+            'phone' => $invoice->phone ?: $sourceCompany->phone,
+            'billing_address' => $sourceCompany->address,
+            'shipping_address' => $sourceCompany->address,
+            'subtotal' => $invoice->subtotal,
+            'discount_amount' => $invoice->discount_amount,
+            'tax_amount' => $invoice->tax_amount,
+            'grand_total' => $invoice->grand_total,
+            'notes' => trim(($invoice->notes ?: '')."\nInter-company purchase auto-created from {$sourceCompany->name} sale {$invoice->invoice_no}."),
+            'terms' => $invoice->terms,
+            'status' => 'posted',
+            'created_by' => auth()->id(),
+            'source_sales_invoice_id' => $invoice->id,
+            'inter_company_source_company_id' => $invoice->company_id,
+        ];
+
+        if ($targetCompanyId) {
+            $payload['company_id'] = $targetCompanyId;
+            $payload['invoice_no'] = $this->nextInterCompanyPurchaseNo($targetCompanyId, $invoice);
+        }
+
+        return $payload;
+    }
+
+    private function reverseInterCompanyPurchase(PurchaseBill $purchase, AccountingService $accounting): void
+    {
+        foreach ($purchase->items as $line) {
+            if (! $line->item) {
+                continue;
+            }
+
+            // Reverse the actual net posting, not the bill quantity. Older broken
+            // records may contain only a reversal movement; posting another out
+            // movement would make the target stock look negative forever.
+            $movements = StockMovement::where('reference_type', PurchaseBill::class)
+                ->where('reference_id', $purchase->id)
+                ->where('item_id', $line->item_id)
+                ->get();
+            $net = round((float) $movements->where('direction', 'in')->sum('quantity') - (float) $movements->where('direction', 'out')->sum('quantity'), 3);
+            if (abs($net) < 0.0005) {
+                continue;
+            }
+            $direction = $net > 0 ? 'out' : 'in';
+            $quantity = abs($net);
+
+            $accounting->moveStock($line->item, [
+                'party_id' => $purchase->party_id,
+                'movement_date' => now()->toDateString(),
+                'movement_type' => 'inter_company_purchase_reversal',
+                'direction' => $direction,
+                'quantity' => $quantity,
+                'unit_price' => $line->unit_price,
+                'total_value' => $quantity * (float) $line->unit_price,
+                'reference_type' => PurchaseBill::class,
+                'reference_id' => $purchase->id,
+                'reference_no' => $purchase->invoice_no,
+                'description' => 'Auto purchase reversal before source sale update.',
+                'movement_units' => $line->selected_units ?? [],
+            ]);
+        }
+
+        if ($purchase->party) {
+            $accounting->postPartyLedger($purchase->party, [
+                'entry_date' => now()->toDateString(),
+                'entry_type' => 'purchase_reversal',
+                'reference_type' => PurchaseBill::class,
+                'reference_id' => $purchase->id,
+                'reference_no' => $purchase->invoice_no,
+                'credit' => 0,
+                'debit' => $purchase->grand_total,
+                'description' => 'Auto purchase ledger reversal before source sale update.',
+            ]);
+        }
+    }
+
+    private function syncPurchaseVisibility(Request $request, PurchaseBill $purchase, int $targetCompanyId): void
+    {
+        $this->syncInterCompanyVisibilityForEntry($request, $purchase, $targetCompanyId);
+    }
+
+    private function syncExistingInterCompanyPurchaseVisibility(SalesInvoice $invoice, Request $request): void
+    {
+        PurchaseBill::with(['items.item'])
+            ->where('source_sales_invoice_id', $invoice->id)
+            ->get()
+            ->each(function (PurchaseBill $purchase) use ($request) {
+                $this->syncPurchaseVisibility($request, $purchase, $purchase->company_id);
+
+                foreach ($purchase->items as $line) {
+                    if ($line->item) {
+                        $this->syncInterCompanyVisibilityForEntry($request, $line->item, $purchase->company_id);
+                    }
+                }
+
+                StockMovement::where('reference_type', PurchaseBill::class)
+                    ->where('reference_id', $purchase->id)
+                    ->get()
+                    ->each(fn (StockMovement $movement) => $this->syncInterCompanyVisibilityForEntry($request, $movement, $purchase->company_id));
+            });
+    }
+
+    private function syncInterCompanyVisibilityForEntry(Request $request, $entry, int $targetCompanyId): void
+    {
+        EntryVisibility::updateOrCreate(
+            [
+                'entry_type' => $entry::class,
+                'entry_id' => $entry->id,
+            ],
+            [
+                'company_id' => $targetCompanyId,
+                'visible_to_all_company' => false,
+                'visible_to_roles' => array_values(array_filter(array_map('intval', $request->input("purchase_visible_to_roles.{$targetCompanyId}", [])))),
+                'visible_to_users' => array_values(array_filter(array_map('intval', $request->input("purchase_visible_to_users.{$targetCompanyId}", [])))),
+            ]
+        );
+    }
+
+    private function interCompanyVisibilityData($companies): array
+    {
+        return $companies->mapWithKeys(fn (Company $company) => [
+            $company->id => [
+                'roles' => Role::where('company_id', $company->id)->orderBy('name')->get(['id', 'name']),
+                'users' => User::where('current_company_id', $company->id)->where('is_active', true)->orderBy('name')->get(['id', 'name', 'email']),
+            ],
+        ])->all();
+    }
+
+    private function interCompanySelectedVisibility(?SalesInvoice $invoice): array
+    {
+        if (! $invoice) {
+            return [];
+        }
+
+        return PurchaseBill::where('source_sales_invoice_id', $invoice->id)
+            ->get()
+            ->mapWithKeys(function (PurchaseBill $bill) {
+                $visibility = EntryVisibility::where('entry_type', PurchaseBill::class)
+                    ->where('entry_id', $bill->id)
+                    ->first();
+
+                return [
+                    $bill->company_id => [
+                        'roles' => $visibility?->visible_to_roles ?? [],
+                        'users' => $visibility?->visible_to_users ?? [],
+                    ],
+                ];
+            })
+            ->all();
+    }
+
+    private function supplierPartyForCompany(int $targetCompanyId, Company $sourceCompany): Party
+    {
+        return Party::firstOrCreate(
+            ['company_id' => $targetCompanyId, 'party_code' => 'CO-'.$sourceCompany->id],
+            [
+                'party_type' => 'supplier',
+                'display_name' => $sourceCompany->name,
+                'legal_name' => $sourceCompany->name,
+                'email' => $sourceCompany->email,
+                'phone' => $sourceCompany->phone,
+                'gstin' => $sourceCompany->gst_number,
+                'pan_number' => $sourceCompany->pan_number,
+                'billing_address' => $sourceCompany->address,
+                'shipping_address' => $sourceCompany->address,
+                'country' => 'India',
+                'status' => 'active',
+                'created_by' => auth()->id(),
+            ]
+        );
+    }
+
+    private function targetItemForSaleLine(Item $sourceItem, int $targetCompanyId): Item
+    {
+        $sourceItem->loadMissing(['productType.productCategory', 'productCategory']);
+        $productCategory = $this->targetProductCategory($sourceItem, $targetCompanyId);
+        $productType = $this->targetProductType($sourceItem, $productCategory, $targetCompanyId);
+
+        $defaults = [
+            'product_type_id' => $productType->id,
+            'product_category_id' => $productCategory?->id,
+            'item_type' => $sourceItem->item_type,
+            'item_code' => $sourceItem->item_code,
+            'hsn_code' => $sourceItem->hsn_code,
+            'barcode' => $sourceItem->barcode,
+            'qr_code' => $sourceItem->qr_code,
+            'name' => $sourceItem->name,
+            'sku' => $sourceItem->sku,
+            'unit' => $sourceItem->unit,
+            'brand' => $sourceItem->brand,
+            'model' => $sourceItem->model,
+            'size' => $sourceItem->size,
+            'color' => $sourceItem->color,
+            'description' => $sourceItem->description,
+            'purchase_price' => $sourceItem->purchase_price,
+            'purchase_tax_inclusive' => $sourceItem->purchase_tax_inclusive,
+            'purchase_gst_percent' => $sourceItem->purchase_gst_percent,
+            'sale_price' => $sourceItem->sale_price,
+            'sale_tax_inclusive' => $sourceItem->sale_tax_inclusive,
+            'sale_gst_percent' => $sourceItem->sale_gst_percent,
+            'max_discount_percent' => $sourceItem->max_discount_percent,
+            'low_stock_qty' => $sourceItem->low_stock_qty,
+            'per_quantity_weight' => $sourceItem->per_quantity_weight,
+            'track_stock' => true,
+            // Do not copy an opening/current balance: stock is posted only by
+            // the matching auto-purchase movement below.
+            'is_bom_enabled' => $sourceItem->is_bom_enabled,
+            'status' => $sourceItem->status ?: 'active',
+            'created_by' => auth()->id(),
+        ];
+
+        $item = Item::firstOrCreate(
+            ['company_id' => $targetCompanyId, 'item_code' => $sourceItem->item_code],
+            $defaults
+        );
+
+        $item->update([
+            'product_type_id' => $productType->id,
+            'product_category_id' => $productCategory?->id,
+            'item_type' => $sourceItem->item_type,
+            'hsn_code' => $sourceItem->hsn_code,
+            'barcode' => $sourceItem->barcode,
+            'qr_code' => $sourceItem->qr_code,
+            'name' => $sourceItem->name,
+            'sku' => $sourceItem->sku,
+            'unit' => $sourceItem->unit,
+            'brand' => $sourceItem->brand,
+            'model' => $sourceItem->model,
+            'size' => $sourceItem->size,
+            'color' => $sourceItem->color,
+            'description' => $sourceItem->description,
+            'purchase_price' => $sourceItem->purchase_price,
+            'purchase_tax_inclusive' => $sourceItem->purchase_tax_inclusive,
+            'purchase_gst_percent' => $sourceItem->purchase_gst_percent,
+            'sale_price' => $sourceItem->sale_price,
+            'sale_tax_inclusive' => $sourceItem->sale_tax_inclusive,
+            'sale_gst_percent' => $sourceItem->sale_gst_percent,
+            'max_discount_percent' => $sourceItem->max_discount_percent,
+            'low_stock_qty' => $sourceItem->low_stock_qty,
+            'per_quantity_weight' => $sourceItem->per_quantity_weight,
+            'track_stock' => true,
+            'is_bom_enabled' => $sourceItem->is_bom_enabled,
+            'status' => $sourceItem->status ?: 'active',
+        ]);
+
+        return $item->fresh(['productType']);
+    }
+
+    private function targetProductCategory(Item $sourceItem, int $targetCompanyId): ?ProductCategory
+    {
+        $sourceCategory = $sourceItem->productCategory ?: $sourceItem->productType?->productCategory;
+        if (! $sourceCategory) {
+            return null;
+        }
+
+        return ProductCategory::firstOrCreate(
+            ['company_id' => $targetCompanyId, 'name' => $sourceCategory->name],
+            ['status' => $sourceCategory->status ?: 'active', 'created_by' => auth()->id()]
+        );
+    }
+
+    private function targetProductType(Item $sourceItem, ?ProductCategory $targetCategory, int $targetCompanyId): ProductType
+    {
+        $sourceType = $sourceItem->productType;
+        $code = $sourceType?->code ?: 'FINISHED';
+
+        $type = ProductType::firstOrCreate(
+            ['company_id' => $targetCompanyId, 'code' => $code],
+            [
+                'name' => $sourceType?->name ?: 'Finished Goods',
+                'nature' => $sourceType?->nature ?: 'finished_goods',
+                'product_category_id' => $targetCategory?->id,
+                'status' => $sourceType?->status ?: 'active',
+                'description' => $sourceType?->description,
+                'created_by' => auth()->id(),
+            ]
+        );
+
+        $type->update([
+            'name' => $sourceType?->name ?: 'Finished Goods',
+            'nature' => $sourceType?->nature ?: 'finished_goods',
+            'product_category_id' => $targetCategory?->id,
+            'status' => $sourceType?->status ?: 'active',
+            'description' => $sourceType?->description,
+        ]);
+
+        return $type;
+    }
+
+    private function nextInterCompanyPurchaseNo(int $targetCompanyId, SalesInvoice $invoice): string
+    {
+        $base = substr('IC-'.$invoice->invoice_no, 0, 20);
+        if (! PurchaseBill::where('company_id', $targetCompanyId)->where('invoice_no', $base)->withTrashed()->exists()) {
+            return $base;
+        }
+
+        $suffix = PurchaseBill::where('company_id', $targetCompanyId)->withTrashed()->count() + 1;
+
+        return substr('IC-'.$invoice->invoice_no.'-'.$suffix, 0, 20);
+    }
+
+    private function isGpsItem(Item $item): bool
+    {
+        return str_contains(strtolower(implode(' ', array_filter([
+            $item->name,
+            $item->item_code,
+            $item->sku,
+            $item->brand,
+            $item->model,
+            $item->description,
+        ]))), 'gps');
+    }
+
+    private function logUpdate(SalesInvoice $invoice, array $oldValues, array $newValues): void
+    {
+        $user = auth()->user();
+        AuditLog::log('updated', [
+            'model' => SalesInvoice::class,
+            'model_id' => $invoice->id,
+            'old_values' => $oldValues,
+            'new_values' => $newValues,
+            'description' => sprintf(
+                'Sales invoice %s updated by %s (%s) for company %s.',
+                $invoice->invoice_no,
+                $user?->name ?? 'System',
+                $user?->rolesForCompany($invoice->company_id)->pluck('name')->join(', ') ?: 'No role',
+                $user?->currentCompany?->name ?? 'Unknown company'
+            ),
+        ]);
+    }
+
+    private function nextNo(): string
+    {
+        return str_pad((string) (SalesInvoice::where('company_id', auth()->user()->current_company_id)->withTrashed()->count() + 1), 8, '0', STR_PAD_LEFT);
+    }
+
+    private function invoiceReturnSummary(SalesInvoice $invoice): array
+    {
+        $invoice->loadMissing(['returns.items.item', 'returns.creator']);
+
+        $lineSummaries = $invoice->items->map(function (SalesInvoiceItem $line) use ($invoice) {
+            $returnLines = $invoice->returns->flatMap(function (SalesReturn $return) use ($line) {
+                return $return->items
+                    ->where('sales_invoice_item_id', $line->id)
+                    ->map(fn (SalesReturnItem $returnLine) => [
+                        'return_id' => $return->id,
+                        'return_no' => $return->return_no,
+                        'return_date' => $return->return_date?->format('d M Y'),
+                        'return_qty' => (float) $returnLine->quantity,
+                        'return_tax' => (float) $returnLine->tax_amount,
+                        'return_amount' => (float) $returnLine->line_total,
+                        'returned_by' => $return->creator?->name ?? 'System',
+                        'returned_at' => $return->created_at?->format('d M Y h:i A'),
+                    ]);
+            })->values();
+
+            $returnedQty = (float) $returnLines->sum('return_qty');
+            $returnedTax = (float) $returnLines->sum('return_tax');
+            $returnedAmount = (float) $returnLines->sum('return_amount');
+
+            return [
+                'line_id' => $line->id,
+                'item_id' => $line->item_id,
+                'item_name' => $line->item?->name ?: 'Item',
+                'sold_qty' => (float) $line->quantity,
+                'returned_qty' => round($returnedQty, 3),
+                'remaining_qty' => max(0, round((float) $line->quantity - $returnedQty, 3)),
+                'line_amount' => (float) $line->line_total,
+                'returned_tax' => round($returnedTax, 2),
+                'returned_amount' => round($returnedAmount, 2),
+                'net_amount' => max(0, round((float) $line->line_total - $returnedAmount, 2)),
+                'returns' => $returnLines,
+            ];
+        })->values();
+
+        $totalReturned = (float) $lineSummaries->sum('returned_qty');
+        $returnedSubtotal = (float) $invoice->returns->sum('subtotal');
+        $returnedTax = (float) $invoice->returns->sum('tax_amount');
+        $returnedAmount = (float) $invoice->returns->sum('grand_total');
+
+        return [
+            'has_return' => $totalReturned > 0,
+            'returned_qty' => round($totalReturned, 3),
+            'returned_subtotal' => round($returnedSubtotal, 2),
+            'returned_tax' => round($returnedTax, 2),
+            'returned_amount' => round($returnedAmount, 2),
+            'net_total' => max(0, round((float) $invoice->grand_total - $returnedAmount, 2)),
+            'items' => $lineSummaries,
+        ];
+    }
+}

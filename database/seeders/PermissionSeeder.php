@@ -1,0 +1,173 @@
+<?php
+
+namespace Database\Seeders;
+
+use App\Models\Company;
+use App\Models\Permission;
+use App\Models\Role;
+use App\Models\User;
+use App\Models\UserCompany;
+use App\Models\UserRole;
+use Illuminate\Database\Seeder;
+
+class PermissionSeeder extends Seeder
+{
+    public function run(): void
+    {
+        $permissions = [
+            ['name'=>'View Users', 'slug'=>'users.view', 'module'=>'users'],
+            ['name'=>'Create Users', 'slug'=>'users.create', 'module'=>'users'],
+            ['name'=>'Edit Users', 'slug'=>'users.edit', 'module'=>'users'],
+            ['name'=>'Delete Users', 'slug'=>'users.delete', 'module'=>'users'],
+
+            ['name'=>'View Roles', 'slug'=>'roles.view', 'module'=>'roles'],
+            ['name'=>'Create Roles', 'slug'=>'roles.create', 'module'=>'roles'],
+            ['name'=>'Edit Roles', 'slug'=>'roles.edit', 'module'=>'roles'],
+            ['name'=>'Delete Roles', 'slug'=>'roles.delete', 'module'=>'roles'],
+
+            ['name'=>'View Sales', 'slug'=>'sales.view', 'module'=>'sales'],
+            ['name'=>'Create Sales', 'slug'=>'sales.create', 'module'=>'sales'],
+            ['name'=>'Edit Sales', 'slug'=>'sales.edit', 'module'=>'sales'],
+            ['name'=>'Delete Sales', 'slug'=>'sales.delete', 'module'=>'sales'],
+            ['name'=>'Print Sales', 'slug'=>'sales.print', 'module'=>'sales'],
+
+            ['name'=>'View Estimates', 'slug'=>'estimates.view', 'module'=>'estimates'],
+            ['name'=>'Create Estimates', 'slug'=>'estimates.create', 'module'=>'estimates'],
+            ['name'=>'Edit Estimates', 'slug'=>'estimates.edit', 'module'=>'estimates'],
+            ['name'=>'Delete Estimates', 'slug'=>'estimates.delete', 'module'=>'estimates'],
+            ['name'=>'Convert Estimates', 'slug'=>'estimates.convert', 'module'=>'estimates'],
+            ['name'=>'Print Estimates', 'slug'=>'estimates.print', 'module'=>'estimates'],
+
+            ['name'=>'View Delivery Challans', 'slug'=>'delivery_challans.view', 'module'=>'delivery_challans'],
+            ['name'=>'Create Delivery Challans', 'slug'=>'delivery_challans.create', 'module'=>'delivery_challans'],
+            ['name'=>'Edit Delivery Challans', 'slug'=>'delivery_challans.edit', 'module'=>'delivery_challans'],
+            ['name'=>'Delete Delivery Challans', 'slug'=>'delivery_challans.delete', 'module'=>'delivery_challans'],
+            ['name'=>'Print Delivery Challans', 'slug'=>'delivery_challans.print', 'module'=>'delivery_challans'],
+
+            ['name'=>'View Special Stock Out', 'slug'=>'stock_out_challans.view', 'module'=>'stock_out_challans'],
+            ['name'=>'Create Special Stock Out', 'slug'=>'stock_out_challans.create', 'module'=>'stock_out_challans'],
+            ['name'=>'Edit Special Stock Out', 'slug'=>'stock_out_challans.edit', 'module'=>'stock_out_challans'],
+            ['name'=>'Delete Special Stock Out', 'slug'=>'stock_out_challans.delete', 'module'=>'stock_out_challans'],
+            ['name'=>'Print Special Stock Out', 'slug'=>'stock_out_challans.print', 'module'=>'stock_out_challans'],
+
+            ['name'=>'View Purchase', 'slug'=>'purchase.view', 'module'=>'purchase'],
+            ['name'=>'Create Purchase', 'slug'=>'purchase.create', 'module'=>'purchase'],
+            ['name'=>'Edit Purchase', 'slug'=>'purchase.edit', 'module'=>'purchase'],
+            ['name'=>'Delete Purchase', 'slug'=>'purchase.delete', 'module'=>'purchase'],
+            ['name'=>'Print Purchase', 'slug'=>'purchase.print', 'module'=>'purchase'],
+            ['name'=>'View Smart Purchase', 'slug'=>'smart_purchase.view', 'module'=>'smart_purchase'],
+            ['name'=>'Create Smart Purchase', 'slug'=>'smart_purchase.create', 'module'=>'smart_purchase'],
+
+            ['name'=>'View Purchase Estimates', 'slug'=>'purchase_estimates.view', 'module'=>'purchase_estimates'],
+            ['name'=>'Create Purchase Estimates', 'slug'=>'purchase_estimates.create', 'module'=>'purchase_estimates'],
+            ['name'=>'Edit Purchase Estimates', 'slug'=>'purchase_estimates.edit', 'module'=>'purchase_estimates'],
+            ['name'=>'Delete Purchase Estimates', 'slug'=>'purchase_estimates.delete', 'module'=>'purchase_estimates'],
+            ['name'=>'Convert Purchase Estimates', 'slug'=>'purchase_estimates.convert', 'module'=>'purchase_estimates'],
+            ['name'=>'Print Purchase Estimates', 'slug'=>'purchase_estimates.print', 'module'=>'purchase_estimates'],
+
+            ['name'=>'View Stocks', 'slug'=>'stocks.view', 'module'=>'stocks'],
+            ['name'=>'Add Stocks', 'slug'=>'stocks.create', 'module'=>'stocks'],
+            ['name'=>'Edit Stocks', 'slug'=>'stocks.edit', 'module'=>'stocks'],
+
+            ['name'=>'View Replacements', 'slug'=>'replacements.view', 'module'=>'replacements'],
+            ['name'=>'Create Replacements', 'slug'=>'replacements.create', 'module'=>'replacements'],
+            ['name'=>'Edit Replacements', 'slug'=>'replacements.edit', 'module'=>'replacements'],
+            ['name'=>'Delete Replacements', 'slug'=>'replacements.delete', 'module'=>'replacements'],
+            ['name'=>'Approve Replacements', 'slug'=>'replacements.approve', 'module'=>'replacements'],
+
+            ['name'=>'View Items', 'slug'=>'items.view', 'module'=>'items'],
+            ['name'=>'Create Items', 'slug'=>'items.create', 'module'=>'items'],
+            ['name'=>'Edit Items', 'slug'=>'items.edit', 'module'=>'items'],
+            ['name'=>'Delete Items', 'slug'=>'items.delete', 'module'=>'items'],
+
+            ['name'=>'View Product Types', 'slug'=>'product_types.view', 'module'=>'product_types'],
+            ['name'=>'Manage Product Types', 'slug'=>'product_types.manage', 'module'=>'product_types'],
+
+            ['name'=>'View Production', 'slug'=>'production.view', 'module'=>'production'],
+            ['name'=>'Create Production', 'slug'=>'production.create', 'module'=>'production'],
+            ['name'=>'View CRM Reverts', 'slug'=>'production_reverts.view', 'module'=>'production_reverts'],
+            ['name'=>'Manage CRM Reverts', 'slug'=>'production_reverts.manage', 'module'=>'production_reverts'],
+
+            ['name'=>'View Expenses', 'slug'=>'expenses.view', 'module'=>'expenses'],
+            ['name'=>'Create Expenses', 'slug'=>'expenses.create', 'module'=>'expenses'],
+            ['name'=>'Edit Expenses', 'slug'=>'expenses.edit', 'module'=>'expenses'],
+            ['name'=>'Delete Expenses', 'slug'=>'expenses.delete', 'module'=>'expenses'],
+            ['name'=>'Approve Expenses', 'slug'=>'expenses.approve', 'module'=>'expenses'],
+
+            ['name'=>'View Other Income Expense', 'slug'=>'other_transactions.view', 'module'=>'other_transactions'],
+            ['name'=>'Create Other Income Expense', 'slug'=>'other_transactions.create', 'module'=>'other_transactions'],
+            ['name'=>'Edit Other Income Expense', 'slug'=>'other_transactions.edit', 'module'=>'other_transactions'],
+            ['name'=>'Approve Other Income Expense', 'slug'=>'other_transactions.approve', 'module'=>'other_transactions'],
+
+            ['name'=>'View Parties', 'slug'=>'parties.view', 'module'=>'parties'],
+            ['name'=>'Create Parties', 'slug'=>'parties.create', 'module'=>'parties'],
+            ['name'=>'Edit Parties', 'slug'=>'parties.edit', 'module'=>'parties'],
+            ['name'=>'Delete Parties', 'slug'=>'parties.delete', 'module'=>'parties'],
+
+            ['name'=>'View Banking', 'slug'=>'banking.view', 'module'=>'banking'],
+            ['name'=>'Manage Banking', 'slug'=>'banking.manage', 'module'=>'banking'],
+
+            ['name'=>'View Cost Centers', 'slug'=>'cost_centers.view', 'module'=>'cost_centers'],
+            ['name'=>'Manage Cost Centers', 'slug'=>'cost_centers.manage', 'module'=>'cost_centers'],
+
+            ['name'=>'View Party Payments', 'slug'=>'party_payments.view', 'module'=>'party_payments'],
+            ['name'=>'Create Party Payments', 'slug'=>'party_payments.create', 'module'=>'party_payments'],
+            ['name'=>'Edit Party Payments', 'slug'=>'party_payments.edit', 'module'=>'party_payments'],
+            ['name'=>'Delete Party Payments', 'slug'=>'party_payments.delete', 'module'=>'party_payments'],
+
+            ['name'=>'View Party Reports', 'slug'=>'reports.party', 'module'=>'reports'],
+            ['name'=>'View Stock Reports', 'slug'=>'reports.stock', 'module'=>'reports'],
+            ['name'=>'View Expense Reports', 'slug'=>'reports.expense', 'module'=>'reports'],
+            ['name'=>'View GST Reports', 'slug'=>'reports.gst', 'module'=>'reports'],
+            ['name'=>'View Transaction Reports', 'slug'=>'reports.transaction', 'module'=>'reports'],
+            ['name'=>'View Sales Targets', 'slug'=>'sales_targets.view', 'module'=>'sales_targets'],
+            ['name'=>'Create Sales Targets', 'slug'=>'sales_targets.create', 'module'=>'sales_targets'],
+            ['name'=>'Edit Sales Targets', 'slug'=>'sales_targets.edit', 'module'=>'sales_targets'],
+            ['name'=>'Delete Sales Targets', 'slug'=>'sales_targets.delete', 'module'=>'sales_targets'],
+            ['name'=>'View Sales Target Reports', 'slug'=>'sales_targets.report', 'module'=>'sales_targets'],
+
+            ['name'=>'View Credit Notes', 'slug'=>'credit_notes.view', 'module'=>'credit_notes'],
+            ['name'=>'Create Credit Notes', 'slug'=>'credit_notes.create', 'module'=>'credit_notes'],
+            ['name'=>'Edit Credit Notes', 'slug'=>'credit_notes.edit', 'module'=>'credit_notes'],
+            ['name'=>'Delete Credit Notes', 'slug'=>'credit_notes.delete', 'module'=>'credit_notes'],
+            ['name'=>'Print Credit Notes', 'slug'=>'credit_notes.print', 'module'=>'credit_notes'],
+
+            ['name'=>'View Audit Logs', 'slug'=>'audit.view', 'module'=>'audit'],
+            ['name'=>'Manage Terms', 'slug'=>'terms.manage', 'module'=>'terms'],
+        ];
+
+        foreach ($permissions as $permission) {
+            Permission::firstOrCreate(['slug' => $permission['slug']], $permission);
+        }
+
+        $this->backfillCompanyAdminRoles();
+
+        $this->command->info('Permissions seeded: ' . count($permissions));
+    }
+
+    private function backfillCompanyAdminRoles(): void
+    {
+        $permissionIds = Permission::whereNotIn('module', ['permissions','companies'])->pluck('id')->all();
+
+        Company::all()->each(function (Company $company) use ($permissionIds) {
+            $role = Role::firstOrCreate(
+                ['company_id' => $company->id, 'slug' => 'company-admin'],
+                [
+                    'name' => 'Company Admin',
+                    'description' => 'Default full-access admin role for this company.',
+                    'is_active' => true,
+                ]
+            );
+
+            $role->permissions()->sync($permissionIds);
+
+            User::where('user_type', 'admin')
+                ->where('current_company_id', $company->id)
+                ->get()
+                ->each(function (User $admin) use ($company, $role) {
+                    UserCompany::firstOrCreate(['user_id' => $admin->id, 'company_id' => $company->id]);
+                    UserRole::firstOrCreate(['user_id' => $admin->id, 'company_id' => $company->id, 'role_id' => $role->id]);
+                });
+        });
+    }
+}
