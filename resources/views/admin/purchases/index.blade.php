@@ -13,7 +13,7 @@
             @foreach($bills as $bill)
                 <tr>
                     <td>{{ $bill->invoice_no }}</td>
-                    <td>{{ $bill->billing_date?->format('d M Y') }}</td>
+                    <td data-order="{{ $bill->billing_date?->format('Y-m-d') }}">{{ $bill->billing_date?->format('d M Y') }}</td>
                     <td>{{ $bill->party?->display_name ?: 'Cash' }}</td>
                     <td>@foreach($bill->items as $line)<div><b>{{ $line->item?->name }}</b> <small class="text-muted">x {{ $line->quantity }}</small></div>@endforeach</td>
                     <td>@forelse($bill->items->flatMap(fn($line) => $line->selected_units ?? []) as $unit)<span class="badge badge-info mr-1 mb-1">{{ $unit['serial_no'] ?? $unit['vts_sim'] ?? $unit['sku'] ?? $unit['key'] ?? 'Unit' }}</span>@empty<span class="text-muted">-</span>@endforelse<span class="d-none">{{ $bill->items->flatMap(fn($line) => collect($line->selected_units ?? [])->flatMap(fn($unit) => [$unit['serial_no'] ?? null, $unit['vts_sim'] ?? null, $unit['sku'] ?? null, $unit['batch_no'] ?? null, $unit['production_batch_no'] ?? null, $unit['key'] ?? null]))->filter()->join(' ') }}</span></td>
@@ -34,4 +34,4 @@
     </div>
 </div>
 @endsection
-@push('scripts')<script>$('#purchasesTable').DataTable({pageLength:25, columnDefs:[{orderable:false, targets:9}]});</script>@endpush
+@push('scripts')<script>$('#purchasesTable').DataTable({pageLength:25, order:[[1, 'desc']], columnDefs:[{orderable:false, targets:9}]});</script>@endpush

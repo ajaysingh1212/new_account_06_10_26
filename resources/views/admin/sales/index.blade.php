@@ -23,7 +23,7 @@
                         {{ $monthSerials[$monthKey] }}
                         <div><small class="text-muted">{{ $invoice->invoice_no }}</small></div>
                     </td>
-                    <td>{{ $invoice->billing_date?->format('d M Y') }}</td>
+                    <td data-order="{{ $invoice->billing_date?->format('Y-m-d') }}">{{ $invoice->billing_date?->format('d M Y') }}</td>
                     <td>{{ $invoice->party?->display_name ?: 'Cash' }}</td>
                     <td>@foreach($invoice->items as $line)<div><b>{{ $line->item?->name }}</b> <small class="text-muted">x {{ $line->quantity }}</small></div>@endforeach</td>
                     <td>@foreach($invoice->items as $line)@foreach(($line->selected_units ?? []) as $unit)<span class="badge badge-info mr-1 mb-1">{{ $unit['serial_no'] ?? $unit['vts_sim'] ?? $unit['sku'] ?? $unit['key'] ?? 'Unit' }}</span>@endforeach @endforeach<span class="d-none">{{ $invoice->items->flatMap(fn($line) => collect($line->selected_units ?? [])->flatMap(fn($unit) => [$unit['serial_no'] ?? null, $unit['vts_sim'] ?? null, $unit['sku'] ?? null, $unit['batch_no'] ?? null, $unit['production_batch_no'] ?? null, $unit['key'] ?? null]))->filter()->join(' ') }}</span></td>
@@ -84,7 +84,7 @@
 </div>
 @endsection
 @push('scripts')<script>
-$('#salesTable').DataTable({pageLength:25, order:[], columnDefs:[{orderable:false, targets:[0,9]}]});
+$('#salesTable').DataTable({pageLength:25, order:[[1, 'desc']], columnDefs:[{orderable:false, targets:[0,9]}]});
 const money = value => 'Rs ' + Number(value || 0).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2});
 $(document).on('click', '.sale-detail-btn', function() {
     const detail = $(this).data('detail') || {};
