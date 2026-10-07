@@ -399,6 +399,7 @@ $serialByIdx = collect($serialLines)->keyBy('index');
                     <td>
                         <input type="number"
                                class="qty-input line-qty"
+                               name="quantity[]"
                                data-idx="{{ $idx }}"
                                data-line-id="{{ $line->id }}"
                                step="0.001" min="0.001"

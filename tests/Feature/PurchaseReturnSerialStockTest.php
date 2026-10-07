@@ -229,6 +229,21 @@ class PurchaseReturnSerialStockTest extends TestCase
             collect(app(SerialUnitService::class)->currentStockUnitsByItem($source->id, $sourceItem->id)[$sourceItem->id] ?? [])->pluck('serial_no')->all()
         );
         $purchaseReturn = PurchaseReturn::firstOrFail();
+        $this->withMiddleware();
+        $this->get(route('admin.purchase-returns.edit', $purchaseReturn))
+            ->assertOk()
+            ->assertSee('name="quantity[]"', false);
+
+        $this->put(route('admin.purchase-returns.update', $purchaseReturn), [
+            'return_no' => 'PR-IC-1',
+            'return_date' => '2026-09-25',
+            'line_id' => [$line->id],
+            'quantity' => [1],
+            'returned_units' => [json_encode([$unit])],
+        ])->assertRedirect(route('admin.purchase-returns.show', $purchaseReturn));
+
+        $this->assertSame(0.0, (float) $buyerItem->fresh()->current_stock);
+        $this->assertSame(1.0, (float) $sourceItem->fresh()->current_stock);
         $this->assertDatabaseHas('sales_returns', [
             'company_id' => $source->id,
             'sales_invoice_id' => $sale->id,
