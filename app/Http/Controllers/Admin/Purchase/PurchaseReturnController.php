@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin\Purchase;
 
 use App\Http\Controllers\Controller;
 use App\Models\Item;
+use App\Models\PartyLedger;
 use App\Models\PurchaseBill;
 use App\Models\PurchaseReturn;
 use App\Models\PurchaseReturnItem;
@@ -111,7 +112,7 @@ class PurchaseReturnController extends Controller
             ]);
 
             $this->postPartyLedger($bill, $return, $accounting, $subtotal + $tax);
-            $this->syncInterCompanySalesReturn($bill, $return);
+            $this->syncInterCompanySalesReturn($bill, $return, $accounting);
             $visibility->syncFromRequest($request, $return);
         });
 
@@ -177,7 +178,7 @@ class PurchaseReturnController extends Controller
             ]);
 
             $this->postPartyLedger($bill, $purchaseReturn, $accounting, $subtotal + $tax);
-            $this->syncInterCompanySalesReturn($bill, $purchaseReturn);
+            $this->syncInterCompanySalesReturn($bill, $purchaseReturn, $accounting);
             $visibility->syncFromRequest($request, $purchaseReturn);
         });
 
@@ -426,7 +427,7 @@ class PurchaseReturnController extends Controller
         ]);
     }
 
-    private function syncInterCompanySalesReturn(PurchaseBill $bill, PurchaseReturn $return): void
+    private function syncInterCompanySalesReturn(PurchaseBill $bill, PurchaseReturn $return, AccountingService $accounting): void
     {
         if (!$bill->inter_company_source_company_id || !$bill->source_sales_invoice_id) {
             return;
@@ -502,6 +503,30 @@ class PurchaseReturnController extends Controller
             'tax_amount' => $tax,
             'grand_total' => $subtotal + $tax,
         ]);
+
+        if ($invoice->sale_type === 'credit' && $invoice->party) {
+            $party = $invoice->party()->lockForUpdate()->firstOrFail();
+            $postedAmount = (float) PartyLedger::where('company_id', $invoice->company_id)
+                ->where('party_id', $party->id)
+                ->where('reference_type', SalesReturn::class)
+                ->where('reference_id', $salesReturn->id)
+                ->selectRaw('COALESCE(SUM(credit - debit), 0) as amount')
+                ->value('amount');
+            $difference = round((float) $salesReturn->grand_total - $postedAmount, 2);
+
+            if ($difference != 0) {
+                $accounting->postPartyLedger($party, [
+                    'entry_date' => $salesReturn->return_date,
+                    'entry_type' => 'sales_return',
+                    'reference_type' => SalesReturn::class,
+                    'reference_id' => $salesReturn->id,
+                    'reference_no' => $salesReturn->return_no,
+                    'debit' => max(0, -$difference),
+                    'credit' => max(0, $difference),
+                    'description' => 'Auto sales return receivable adjustment for purchase return ' . $return->return_no . '.',
+                ]);
+            }
+        }
     }
 
     private function sourceCompanyUnits(array $units, Item $sourceItem): array

@@ -181,9 +181,14 @@ class PurchaseReturnSerialStockTest extends TestCase
             'name' => 'Ready Item', 'unit' => 'PCS', 'purchase_price' => 100, 'current_stock' => 1,
             'stock_value' => 100, 'track_stock' => true, 'status' => 'active',
         ]);
+        $party = \App\Models\Party::create([
+            'company_id' => $source->id, 'party_code' => 'CUSTOMER-IC',
+            'party_type' => 'customer', 'display_name' => 'Company B', 'current_balance' => -100,
+        ]);
         $sale = SalesInvoice::create([
             'company_id' => $source->id,
-            'sale_type' => 'cash',
+            'sale_type' => 'credit',
+            'party_id' => $party->id,
             'invoice_no' => 'SALE-IC-1',
             'billing_date' => '2026-09-20',
             'inter_company_transfer' => true,
@@ -229,6 +234,7 @@ class PurchaseReturnSerialStockTest extends TestCase
             collect(app(SerialUnitService::class)->currentStockUnitsByItem($source->id, $sourceItem->id)[$sourceItem->id] ?? [])->pluck('serial_no')->all()
         );
         $purchaseReturn = PurchaseReturn::firstOrFail();
+        $this->assertSame(0.0, (float) $party->fresh()->current_balance);
         $this->withMiddleware();
         $this->get(route('admin.purchase-returns.edit', $purchaseReturn))
             ->assertOk()
@@ -244,6 +250,8 @@ class PurchaseReturnSerialStockTest extends TestCase
 
         $this->assertSame(0.0, (float) $buyerItem->fresh()->current_stock);
         $this->assertSame(1.0, (float) $sourceItem->fresh()->current_stock);
+        $this->assertSame(0.0, (float) $party->fresh()->current_balance);
+        $this->assertSame(1, \App\Models\PartyLedger::where('party_id', $party->id)->where('entry_type', 'sales_return')->count());
         $this->assertDatabaseHas('sales_returns', [
             'company_id' => $source->id,
             'sales_invoice_id' => $sale->id,
