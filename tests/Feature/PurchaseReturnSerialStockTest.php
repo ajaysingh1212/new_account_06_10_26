@@ -7,6 +7,9 @@ use App\Models\Item;
 use App\Models\ProductType;
 use App\Models\PurchaseBill;
 use App\Models\PurchaseBillItem;
+use App\Models\PurchaseReturn;
+use App\Models\SalesInvoice;
+use App\Models\SalesInvoiceItem;
 use App\Models\StockMovement;
 use App\Models\User;
 use App\Services\SerialUnitService;
@@ -178,9 +181,25 @@ class PurchaseReturnSerialStockTest extends TestCase
             'name' => 'Ready Item', 'unit' => 'PCS', 'purchase_price' => 100, 'current_stock' => 1,
             'stock_value' => 100, 'track_stock' => true, 'status' => 'active',
         ]);
+        $sale = SalesInvoice::create([
+            'company_id' => $source->id,
+            'sale_type' => 'cash',
+            'invoice_no' => 'SALE-IC-1',
+            'billing_date' => '2026-09-20',
+            'inter_company_transfer' => true,
+            'inter_company_target_company_ids' => [$buyer->id],
+        ]);
+        SalesInvoiceItem::create([
+            'sales_invoice_id' => $sale->id, 'item_id' => $sourceItem->id, 'quantity' => 1,
+            'unit' => 'PCS', 'unit_price' => 100, 'line_total' => 100, 'selected_units' => [[
+                'key' => 'IC-UNIT-1', 'serial_no' => 'IC-SERIAL-1', 'item_id' => $sourceItem->id,
+            ]],
+        ]);
+
         $bill = PurchaseBill::create([
             'company_id' => $buyer->id, 'purchase_type' => 'cash', 'invoice_no' => 'IC-PUR-1',
             'billing_date' => '2026-09-20', 'inter_company_source_company_id' => $source->id,
+            'source_sales_invoice_id' => $sale->id,
         ]);
         $unit = ['key' => 'IC-UNIT-1', 'serial_no' => 'IC-SERIAL-1', 'item_id' => $buyerItem->id];
         $line = PurchaseBillItem::create([
@@ -209,5 +228,15 @@ class PurchaseReturnSerialStockTest extends TestCase
             ['IC-SERIAL-1'],
             collect(app(SerialUnitService::class)->currentStockUnitsByItem($source->id, $sourceItem->id)[$sourceItem->id] ?? [])->pluck('serial_no')->all()
         );
+        $purchaseReturn = PurchaseReturn::firstOrFail();
+        $this->assertDatabaseHas('sales_returns', [
+            'company_id' => $source->id,
+            'sales_invoice_id' => $sale->id,
+            'source_purchase_return_id' => $purchaseReturn->id,
+        ]);
+
+        $pool = app(SerialUnitService::class)->unitPool($source->id);
+        $sourceUnits = collect($pool[$sourceItem->id] ?? []);
+        $this->assertTrue($sourceUnits->contains(fn($unit) => ($unit['serial_no'] ?? null) === 'IC-SERIAL-1' && empty($unit['sold'])));
     }
 }

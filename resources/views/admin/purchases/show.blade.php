@@ -40,6 +40,34 @@
             @endforeach
             </tbody>
         </table>
+        @if(($purchaseReturnDetails['has_return'] ?? false))
+            <div class="alert alert-warning mt-3">
+                <strong>Purchase return posted:</strong>
+                {{ number_format($purchaseReturnDetails['returned_qty'], 3) }} qty returned,
+                Rs {{ number_format($purchaseReturnDetails['returned_amount'], 2) }} amount.
+            </div>
+            <table class="table table-sm table-bordered">
+                <thead><tr><th>Item</th><th>Returned Qty</th><th>Serials Returned</th><th>Return Details</th></tr></thead>
+                <tbody>
+                @foreach($bill->returns as $return)
+                    @foreach($return->items as $returnLine)
+                        <tr>
+                            <td>{{ $returnLine->item?->name ?? 'Item' }}</td>
+                            <td>{{ number_format((float) $returnLine->quantity, 3) }}</td>
+                            <td>
+                                @forelse(($returnLine->selected_units ?? []) as $unit)
+                                    <span class="badge badge-warning mr-1">{{ $unit['serial_no'] ?? $unit['vts_sim'] ?? $unit['sku'] ?? $unit['key'] ?? 'Unit' }}</span>
+                                @empty
+                                    <span class="text-muted">-</span>
+                                @endforelse
+                            </td>
+                            <td><a href="{{ route('admin.purchase-returns.show', $return) }}">{{ $return->return_no }}</a> on {{ $return->return_date?->format('d M Y') }}</td>
+                        </tr>
+                    @endforeach
+                @endforeach
+                </tbody>
+            </table>
+        @endif
     </div>
 </div>
 @if(($stockGapRows ?? collect())->isNotEmpty())

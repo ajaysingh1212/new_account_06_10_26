@@ -20,7 +20,12 @@
                     <td>{{ $bill->creator?->name ?? 'System' }}<br><small class="text-muted">{{ $bill->creator?->rolesForCompany($bill->company_id)->pluck('name')->join(', ') }}</small></td>
                     <td>{{ ucfirst($bill->purchase_type) }}</td>
                     <td>Rs {{ number_format((float)$bill->grand_total,2) }}</td>
-                    <td><span class="badge-active">{{ ucfirst($bill->status) }}</span></td>
+                    <td>
+                        <span class="badge-active">{{ ucfirst($bill->status) }}</span>
+                        @if($bill->returns->isNotEmpty())
+                            <div><span class="badge badge-warning mt-1">Returned {{ number_format((float) $bill->returns->sum('grand_total'), 2) }}</span></div>
+                        @endif
+                    </td>
                     <td><a href="{{ route('admin.purchases.show',$bill) }}" class="btn btn-info btn-sm"><i class="fas fa-eye"></i></a> @can('purchase.edit')<a href="{{ route('admin.purchases.edit',$bill) }}" class="btn btn-warning btn-sm"><i class="fas fa-edit"></i></a>@endcan @can('purchase.print')<a href="{{ route('admin.purchases.print',$bill) }}" target="_blank" class="btn btn-secondary btn-sm"><i class="fas fa-print"></i></a>@endcan</td>
                 </tr>
             @endforeach

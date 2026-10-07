@@ -7,6 +7,9 @@ use App\Models\Item;
 use App\Models\PurchaseBill;
 use App\Models\PurchaseReturn;
 use App\Models\PurchaseReturnItem;
+use App\Models\SalesInvoice;
+use App\Models\SalesReturn;
+use App\Models\SalesReturnItem;
 use App\Models\StockMovement;
 use App\Services\AccountingService;
 use App\Services\EntryVisibilityService;
@@ -86,7 +89,7 @@ class PurchaseReturnController extends Controller
         ]);
 
         DB::transaction(function () use ($request, $accounting, $visibility) {
-            $bill = PurchaseBill::with(['items.item', 'party'])->lockForUpdate()->findOrFail($request->purchase_bill_id);
+            $bill = PurchaseBill::with(['items.item', 'party', 'company'])->lockForUpdate()->findOrFail($request->purchase_bill_id);
 
             $return = PurchaseReturn::create([
                 'company_id' => $bill->company_id,
@@ -107,6 +110,7 @@ class PurchaseReturnController extends Controller
             ]);
 
             $this->postPartyLedger($bill, $return, $accounting, $subtotal + $tax);
+            $this->syncInterCompanySalesReturn($bill, $return);
             $visibility->syncFromRequest($request, $return);
         });
 
@@ -151,7 +155,7 @@ class PurchaseReturnController extends Controller
         ]);
 
         DB::transaction(function () use ($request, $purchaseReturn, $accounting, $visibility) {
-            $bill = PurchaseBill::with(['items.item', 'party'])->lockForUpdate()->findOrFail($purchaseReturn->purchase_bill_id);
+            $bill = PurchaseBill::with(['items.item', 'party', 'company'])->lockForUpdate()->findOrFail($purchaseReturn->purchase_bill_id);
 
             $this->reverseOldEntries($purchaseReturn->load('items.item'), $accounting, $bill);
             $purchaseReturn->items()->delete();
@@ -171,6 +175,7 @@ class PurchaseReturnController extends Controller
             ]);
 
             $this->postPartyLedger($bill, $purchaseReturn, $accounting, $subtotal + $tax);
+            $this->syncInterCompanySalesReturn($bill, $purchaseReturn);
             $visibility->syncFromRequest($request, $purchaseReturn);
         });
 
@@ -415,8 +420,106 @@ class PurchaseReturnController extends Controller
             'reference_id' => $return->id,
             'reference_no' => $return->return_no,
             'description' => $direction === 'in' ? 'Stock received from inter-company purchase return.' : 'Inter-company purchase return reversal.',
-            'movement_units' => $units,
+            'movement_units' => $this->sourceCompanyUnits($units, $sourceItem),
         ]);
+    }
+
+    private function syncInterCompanySalesReturn(PurchaseBill $bill, PurchaseReturn $return): void
+    {
+        if (!$bill->inter_company_source_company_id || !$bill->source_sales_invoice_id) {
+            return;
+        }
+
+        $invoice = SalesInvoice::with(['items.item', 'party'])
+            ->where('company_id', $bill->inter_company_source_company_id)
+            ->find($bill->source_sales_invoice_id);
+
+        if (!$invoice) {
+            return;
+        }
+
+        $existing = SalesReturn::with('items.item')
+            ->where('source_purchase_return_id', $return->id)
+            ->first();
+
+        if ($existing) {
+            $existing->items()->delete();
+        }
+
+        $returningCompanyName = $bill->company?->name ?? 'merged company';
+
+        $salesReturn = SalesReturn::updateOrCreate(
+            ['source_purchase_return_id' => $return->id],
+            [
+                'company_id' => $invoice->company_id,
+                'sales_invoice_id' => $invoice->id,
+                'party_id' => $invoice->party_id,
+                'return_no' => $existing?->return_no ?: $this->nextSalesReturnNo($invoice->company_id),
+                'return_date' => $return->return_date,
+                'reason' => trim("Auto generated because {$returningCompanyName} posted purchase return {$return->return_no}."),
+                'created_by' => auth()->id(),
+            ]
+        );
+
+        $subtotal = $tax = 0;
+        foreach ($return->items()->with(['billItem.item'])->get() as $returnLine) {
+            $billLine = $returnLine->billItem;
+            if (!$billLine?->item) {
+                continue;
+            }
+
+            $invoiceLine = $invoice->items->first(fn($line) => $line->item?->item_code === $billLine->item->item_code);
+            if (!$invoiceLine?->item) {
+                continue;
+            }
+
+            $sourceUnits = $this->sourceCompanyUnits($returnLine->selected_units ?? [], $invoiceLine->item);
+            $ratio = (float) $invoiceLine->quantity > 0 ? (float) $returnLine->quantity / (float) $invoiceLine->quantity : 0;
+            $taxAmount = (float) $invoiceLine->tax_amount * $ratio;
+            $lineTotal = (float) $invoiceLine->line_total * $ratio;
+
+            SalesReturnItem::create([
+                'sales_return_id' => $salesReturn->id,
+                'sales_invoice_item_id' => $invoiceLine->id,
+                'item_id' => $invoiceLine->item_id,
+                'quantity' => $returnLine->quantity,
+                'unit' => $invoiceLine->unit,
+                'unit_price' => $invoiceLine->unit_price,
+                'tax_percent' => $invoiceLine->tax_percent,
+                'tax_amount' => $taxAmount,
+                'line_total' => $lineTotal,
+                'selected_units' => $sourceUnits,
+            ]);
+
+            $subtotal += max(0, $lineTotal - $taxAmount);
+            $tax += $taxAmount;
+        }
+
+        $salesReturn->update([
+            'subtotal' => $subtotal,
+            'tax_amount' => $tax,
+            'grand_total' => $subtotal + $tax,
+        ]);
+    }
+
+    private function sourceCompanyUnits(array $units, Item $sourceItem): array
+    {
+        return collect($units)
+            ->filter(fn($unit) => is_array($unit))
+            ->map(function (array $unit) use ($sourceItem) {
+                $unit['item_id'] = $sourceItem->id;
+                $unit['item_name'] = $sourceItem->name;
+                unset($unit['scope_key']);
+
+                return $unit;
+            })
+            ->values()
+            ->all();
+    }
+
+    private function nextSalesReturnNo(int $companyId): string
+    {
+        return 'SR-' . str_pad((string) (SalesReturn::where('company_id', $companyId)->withTrashed()->count() + 1), 5, '0', STR_PAD_LEFT);
     }
 
     private function currentStock(int $itemId, ?int $companyId = null): float

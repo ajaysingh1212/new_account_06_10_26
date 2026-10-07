@@ -11,7 +11,7 @@ class SalesReturn extends Model
 
     protected $fillable = [
         'company_id','sales_invoice_id','party_id','return_no','return_date','reason',
-        'subtotal','tax_amount','grand_total','status','created_by',
+        'subtotal','tax_amount','grand_total','status','created_by','source_purchase_return_id',
     ];
 
     protected $casts = ['return_date' => 'date'];
@@ -20,4 +20,5 @@ class SalesReturn extends Model
     public function party() { return $this->belongsTo(Party::class); }
     public function items() { return $this->hasMany(SalesReturnItem::class); }
     public function creator() { return $this->belongsTo(User::class, 'created_by'); }
+    public function sourcePurchaseReturn() { return $this->belongsTo(PurchaseReturn::class, 'source_purchase_return_id'); }
 }

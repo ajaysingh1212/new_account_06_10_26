@@ -28,7 +28,7 @@ class PurchaseBillController extends Controller
     public function index(EntryVisibilityService $visibility)
     {
         $bills = $visibility->scopeForUser(
-            PurchaseBill::with(['party','creator','items.item'])->latest(),
+            PurchaseBill::with(['party','creator','items.item','returns.items'])->latest(),
             PurchaseBill::class
         )->get();
         return view('admin.purchases.index', compact('bills'));
