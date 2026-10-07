@@ -141,6 +141,8 @@
         .badge-user { background: rgba(107,114,128,0.1); color: #6B7280; padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; }
 
         /* ── Table ──────────────────────────────── */
+        .table mark.datatable-search-highlight { background: #fde047; color: #1f2937; padding: 0 2px; border-radius: 3px; font: inherit; }
+        @media print { .table mark.datatable-search-highlight { background: transparent; color: inherit; padding: 0; } }
         .table th { font-size: 12px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: #9090B0; border-bottom: 2px solid #F0EAF8 !important; padding: 12px 16px !important; }
         .table td { padding: 12px 16px !important; vertical-align: middle !important; font-size: 14px; border-bottom: 1px solid #F8F6FF !important; }
         .table tbody tr:hover { background: rgba(124,58,237,0.03) !important; }
@@ -360,6 +362,7 @@
 <script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
 
 <script src="https://cdn.datatables.net/1.13.8/js/dataTables.bootstrap4.min.js"></script>
+<script src="{{ asset('js/datatable-search-highlight.js') }}?v={{ filemtime(public_path('js/datatable-search-highlight.js')) }}"></script>
 
 <!-- Select2 -->
 
