@@ -5,6 +5,8 @@
 @endsection
 
 @section('content')
+@include('admin.parties.partials.styles')
+<div class="party-workspace">
 <div class="row">
     <div class="col-6 col-lg-3 mb-4">
         <div class="stat-card stat-purple"><div class="stat-icon"><i class="fas fa-users"></i></div><div class="stat-value">{{ $summary['total'] }}</div><div class="stat-label">Total Parties</div></div>
@@ -20,6 +22,14 @@
     </div>
 </div>
 
+<div class="party-metrics">
+    @foreach(['opening_receivable' => ['Opening Receivable', '#168577', 'fa-folder-open'], 'invoice_receivable' => ['Invoice Receivable', '#218ca6', 'fa-file-invoice'], 'opening_payable' => ['Opening Payable', '#b7791f', 'fa-folder-open'], 'invoice_payable' => ['Invoice Payable', '#c45265', 'fa-file-invoice']] as $key => $metric)
+        <div class="party-metric" style="--metric-color:{{ $metric[1] }}">
+            <i class="fas {{ $metric[2] }}"></i><label>{{ $metric[0] }}</label>
+            <strong>Rs {{ number_format($summary[$key], 2) }}</strong>
+        </div>
+    @endforeach
+</div>
 <div class="card">
     <div class="card-header d-flex justify-content-between align-items-center">
         <h3 class="card-title m-0"><i class="fas fa-id-card mr-2 text-purple"></i> Party Master</h3>
@@ -63,14 +73,12 @@
                                 $receivable = (float) $party->ageing_receivable;
                                 $payable = (float) $party->ageing_payable;
                             @endphp
-                            @if($receivable > 0)
-                                <strong class="text-success">₹ {{ number_format($receivable, 2) }}</strong>
-                                <div style="font-size:12px;color:#9090B0;">Receivable</div>
-                            @endif
-                            @if($payable > 0)
-                                <strong class="text-danger">₹ {{ number_format($payable, 2) }}</strong>
-                                <div style="font-size:12px;color:#9090B0;">Payable</div>
-                            @endif
+                            @foreach($party->balance_breakdown as $component)
+                                <div class="mb-1">
+                                    <strong class="{{ $component['kind'] === 'receivable' ? 'text-success' : 'text-danger' }}">₹ {{ number_format($component['amount'], 2) }}</strong>
+                                    <div style="font-size:12px;color:#9090B0;">{{ $component['label'] }} · {{ ucfirst($component['kind']) }}</div>
+                                </div>
+                            @endforeach
                             @if($receivable <= 0 && $payable <= 0)
                                 <strong class="text-muted">₹ 0.00</strong>
                                 <div style="font-size:12px;color:#9090B0;">Settled</div>
@@ -98,6 +106,7 @@
             </table>
         </div>
     </div>
+</div>
 </div>
 @endsection
 

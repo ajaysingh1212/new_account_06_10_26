@@ -15,6 +15,24 @@
 @endsection
 
 @section('content')
+@include('admin.parties.partials.styles')
+<div class="party-workspace">
+
+<div class="party-metrics">
+    @foreach(['receivable' => ['Receivable', '#168577'], 'payable' => ['Payable', '#c45265']] as $kind => $side)
+        @foreach(['opening' => 'Opening Balance', 'invoice' => 'Invoice Amount'] as $source => $label)
+            @php
+                $amount = $outstandingRows->where('kind', $kind)->filter(fn($row) => ($row['model'] === \App\Models\Party::class) === ($source === 'opening'))->sum('due');
+            @endphp
+            <div class="party-metric" style="--metric-color:{{ $side[1] }}">
+                <i class="fas {{ $source === 'opening' ? 'fa-folder-open' : 'fa-file-invoice' }}"></i>
+                <label>{{ $label }} / {{ $side[0] }}</label>
+                <strong>Rs {{ number_format($amount, 2) }}</strong>
+                <small>{{ $source === 'opening' ? ($party->opening_balance_date?->format('d M Y') ?: '-') : 'Outstanding after returns & payments' }}</small>
+            </div>
+        @endforeach
+    @endforeach
+</div>
 
 <div class="row">
 
@@ -238,12 +256,11 @@
 <div class="card border-0 shadow-sm mb-4">
     <div class="card-header d-flex justify-content-between align-items-center">
         <h3 class="card-title m-0"><i class="fas fa-hand-holding-usd mr-2 text-purple"></i> Advance Payments</h3>
-        <small class="text-muted">Advance entries are created from Payment In / Payment Out and later adjusted against sales or purchase bills.</small>
     </div>
     <div class="card-body">
         <div class="row">
             <div class="col-md-4 mb-3">
-                <div class="card border-0 shadow-sm h-100" style="background:linear-gradient(135deg,#eff6ff,#ffffff);">
+                <div class="advance-summary">
                     <div class="card-body">
                         <div class="text-muted small">Customer Advance</div>
                         <strong>Rs {{ number_format($customerAdvanceTotal, 2) }}</strong>
@@ -252,7 +269,7 @@
                 </div>
             </div>
             <div class="col-md-4 mb-3">
-                <div class="card border-0 shadow-sm h-100" style="background:linear-gradient(135deg,#f0fdf4,#ffffff);">
+                <div class="advance-summary">
                     <div class="card-body">
                         <div class="text-muted small">Supplier Advance</div>
                         <strong>Rs {{ number_format($supplierAdvanceTotal, 2) }}</strong>
@@ -261,18 +278,17 @@
                 </div>
             </div>
             <div class="col-md-4 mb-3">
-                <div class="card border-0 shadow-sm h-100" style="background:linear-gradient(135deg,#f8fafc,#ffffff);">
+                <div class="advance-summary">
                     <div class="card-body">
                         <div class="text-muted small">Advance Records</div>
                         <strong>{{ $advanceHistory->count() }}</strong>
-                        <div class="text-muted small mt-1">Latest advance payments stay linked to this party.</div>
                     </div>
                 </div>
             </div>
         </div>
 
         <div class="table-responsive">
-            <table class="table table-hover table-bordered mb-0">
+            <table id="advanceTable" class="table table-hover mb-0 w-100">
                 <thead>
                     <tr>
                         <th>Date</th>
@@ -287,7 +303,7 @@
                     </tr>
                 </thead>
                 <tbody>
-                    @forelse($advanceHistory as $advance)
+                    @foreach($advanceHistory as $advance)
                         @php
                             $usedAmount = (float) $advance->original_amount - (float) $advance->remaining_amount;
                         @endphp
@@ -315,11 +331,7 @@
                                 @endforelse
                             </td>
                         </tr>
-                    @empty
-                        <tr>
-                            <td colspan="9" class="text-center text-muted py-4">No advance payments found for this party yet.</td>
-                        </tr>
-                    @endforelse
+                    @endforeach
                 </tbody>
             </table>
         </div>
@@ -329,11 +341,10 @@
 <div class="card border-0 shadow-sm mb-4">
     <div class="card-header d-flex justify-content-between align-items-center">
         <h3 class="card-title m-0"><i class="fas fa-balance-scale mr-2 text-purple"></i> Opening Balance Adjustments</h3>
-        <small class="text-muted">Yahan dikhega kisne kab receivable/payable ko kam ya zyada kiya.</small>
     </div>
     <div class="card-body">
         <div class="table-responsive">
-            <table class="table table-hover table-bordered mb-0">
+            <table id="adjustmentTable" class="table table-hover mb-0 w-100">
                 <thead>
                     <tr>
                         <th>Date</th>
@@ -347,7 +358,7 @@
                     </tr>
                 </thead>
                 <tbody>
-                    @forelse($openingBalanceAdjustments as $adjustment)
+                    @foreach($openingBalanceAdjustments as $adjustment)
                         <tr style="background:{{ $adjustment->direction === 'increase' ? '#f0fdf4' : '#fff7ed' }};">
                             <td><strong>{{ $adjustment->adjustment_date?->format('d M Y') ?: '—' }}</strong></td>
                             <td>{{ $adjustment->creator?->name ?: 'System' }}</td>
@@ -362,11 +373,7 @@
                             <td><strong>Rs {{ number_format((float) $adjustment->new_amount, 2) }}</strong></td>
                             <td>{{ $adjustment->reason ?: '-' }}</td>
                         </tr>
-                    @empty
-                        <tr>
-                            <td colspan="8" class="text-center text-muted py-4">No opening balance adjustments found.</td>
-                        </tr>
-                    @endforelse
+                    @endforeach
                 </tbody>
             </table>
         </div>
@@ -382,7 +389,7 @@
 
             <i class="fas fa-book mr-2 text-purple"></i>
 
-            Ledger Statement
+            Account Statement
 
         </h3>
 
@@ -392,6 +399,13 @@
 
         <div class="table-responsive">
 
+            <div class="statement-tools">
+                <div><label for="statementType">Entry Type</label><select id="statementType" class="form-control"><option value="">All entries</option>@foreach($statementRows->pluck('entry_type')->unique()->sort() as $type)<option value="{{ str_replace('_', ' ', ucfirst($type)) }}">{{ str_replace('_', ' ', ucfirst($type)) }}</option>@endforeach</select></div>
+                <div><label for="statementFrom">From</label><input type="date" id="statementFrom" class="form-control"></div>
+                <div><label for="statementTo">To</label><input type="date" id="statementTo" class="form-control"></div>
+                <button type="button" id="resetStatement" class="btn btn-outline-secondary btn-sm" title="Reset filters"><i class="fas fa-undo"></i></button>
+                <button type="button" id="printStatement" class="btn btn-outline-secondary btn-sm" title="Print statement"><i class="fas fa-print"></i></button>
+            </div>
             <table id="ledgerTable"
                    class="table table-hover table-bordered w-100">
 
@@ -419,7 +433,7 @@
 
                             <tr>
 
-                                <td>
+                                <td data-order="{{ $ledger->entry_date?->format('Y-m-d') }}" data-date="{{ $ledger->entry_date?->format('Y-m-d') }}">
 
                                     {{ $ledger->entry_date ? $ledger->entry_date->format('d M Y') : '—' }}
 
@@ -427,7 +441,7 @@
 
                                 <td>
 
-                                    {{ str_replace('_', ' ', ucfirst($ledger->entry_type ?? '')) }}
+                                    <span class="entry-type">{{ str_replace('_', ' ', ucfirst($ledger->entry_type ?? '')) }}</span>
 
                                 </td>
 
@@ -458,29 +472,13 @@
                                 <td class="text-right">
 
                                     ₹ {{ number_format(abs((float) $ledger->balance_after), 2) }}
+                                    <div class="small text-muted">{{ $ledger->balance_after < 0 ? 'Receivable' : ($ledger->balance_after > 0 ? 'Payable' : 'Settled') }}</div>
 
                                 </td>
 
                             </tr>
 
                         @endforeach
-
-                    @else
-
-                        {{-- IMPORTANT: EXACT 7 TDs --}}
-                        <tr>
-
-                            <td>—</td>
-                            <td>—</td>
-                            <td>—</td>
-                            <td class="text-center text-muted">
-                                No ledger entries yet.
-                            </td>
-                            <td>0.00</td>
-                            <td>0.00</td>
-                            <td>0.00</td>
-
-                        </tr>
 
                     @endif
 
@@ -494,6 +492,7 @@
 
 </div>
 
+</div>
 @endsection
 
 @push('scripts')
@@ -506,7 +505,8 @@ $(document).ready(function () {
         $('#ledgerTable').DataTable().destroy();
     }
 
-    $('#ledgerTable').DataTable({
+    var statement = $('#ledgerTable').DataTable({
+        order: [[0, 'desc']],
         pageLength: 25,
         responsive: true,
         autoWidth: false,
@@ -524,6 +524,26 @@ $(document).ready(function () {
             }
         ]
     });
+
+    $.fn.dataTable.ext.search.push(function(settings, data, index) {
+        if (settings.nTable.id !== 'ledgerTable') return true;
+        var date = statement.row(index).node().querySelector('[data-date]').dataset.date;
+        var from = $('#statementFrom').val(), to = $('#statementTo').val();
+        return (!from || date >= from) && (!to || date <= to);
+    });
+    $('#statementType').on('change', function() { statement.column(1).search(this.value).draw(); });
+    $('#statementFrom, #statementTo').on('change', function() { statement.draw(); });
+    $('#resetStatement').on('click', function() {
+        $('#statementType, #statementFrom, #statementTo').val('');
+        statement.search('').columns().search('').draw();
+    });
+    $('#printStatement').on('click', function() {
+        var length = statement.page.len();
+        statement.page.len(-1).draw();
+        window.print();
+        statement.page.len(length).draw();
+    });
+    $('#advanceTable, #adjustmentTable').DataTable({pageLength:10, autoWidth:false, order:[], language:{emptyTable:'No records found'}});
 
 });
 </script>

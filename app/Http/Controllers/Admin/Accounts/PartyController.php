@@ -22,11 +22,21 @@ class PartyController extends Controller
             Party::class
         )->get();
         $balances = $outstanding->balancesByParty($visibility);
-        $parties->each(function (Party $party) use ($balances) {
+        $balanceRows = $outstanding->billRows($visibility)->groupBy('party_id');
+        $parties->each(function (Party $party) use ($balances, $balanceRows) {
             $balance = $balances->get($party->id, ['receivable' => 0.0, 'payable' => 0.0, 'net' => 0.0]);
             $party->setAttribute('ageing_receivable', $balance['receivable']);
             $party->setAttribute('ageing_payable', $balance['payable']);
             $party->setAttribute('ageing_balance', $balance['net']);
+            $rows = $balanceRows->get($party->id, collect());
+            $party->setAttribute('balance_breakdown', collect(['receivable', 'payable'])->flatMap(function ($kind) use ($rows) {
+                $sideRows = $rows->where('kind', $kind);
+
+                return collect([
+                    ['label' => 'Opening Balance', 'kind' => $kind, 'amount' => (float) $sideRows->where('model', Party::class)->sum('due')],
+                    ['label' => 'Invoice Amount', 'kind' => $kind, 'amount' => (float) $sideRows->where('model', '!=', Party::class)->sum('due')],
+                ])->filter(fn(array $row) => $row['amount'] > 0);
+            })->values());
         });
 
         $summary = [
@@ -35,6 +45,11 @@ class PartyController extends Controller
             'receivable' => (float) $parties->sum('ageing_receivable'),
             'active' => $parties->where('status', 'active')->count(),
         ];
+        foreach (['receivable', 'payable'] as $kind) {
+            $rows = $balanceRows->flatten(1)->where('kind', $kind);
+            $summary['opening_' . $kind] = (float) $rows->where('model', Party::class)->sum('due');
+            $summary['invoice_' . $kind] = (float) $rows->where('model', '!=', Party::class)->sum('due');
+        }
 
         return view('admin.parties.index', compact('parties', 'summary'));
     }
@@ -120,6 +135,7 @@ class PartyController extends Controller
         $outstanding = app(PartyOutstandingService::class);
         $visibility->authorizeView($party);
         $ageingBalance = $outstanding->balanceForParty($visibility, $party->id);
+        $outstandingRows = $outstanding->billRows($visibility, $party->id);
         $statementRows = $outstanding->statementRows($visibility, $party->id);
         $statementSummary = $outstanding->statementSummary($visibility, $party->id);
         $availableCustomerAdvances = $party->advances()->where('direction', 'in')->where('remaining_amount', '>', 0)->get();
@@ -138,6 +154,7 @@ class PartyController extends Controller
         return view('admin.parties.show', compact(
             'party',
             'ageingBalance',
+            'outstandingRows',
             'statementRows',
             'statementSummary',
             'availableCustomerAdvances',
