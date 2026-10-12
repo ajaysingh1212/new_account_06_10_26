@@ -69,7 +69,7 @@ class StockController extends Controller
             if ($serialItemIds->contains((int) $item->id)) {
                 $item->current_stock = count($serialsByItem[$item->id] ?? []);
             }
-            $item->calculated_stock_value = (float) $item->current_stock * (float) $item->purchase_price;
+            $item->calculated_stock_value = round((float) $item->current_stock * (float) $item->purchase_price, 2);
             $item->calculated_avg_rate = (float) $item->purchase_price;
         });
 

@@ -22,8 +22,8 @@
 </div>
 
 <div class="metric-grid">
-    <div class="metric"><small>Overall Stock Value</small><b>Rs {{ number_format($overallValue,2) }}</b></div>
-    <div class="metric"><small>Overall Quantity</small><b>{{ number_format($overallQty,3) }}</b></div>
+    <div class="metric"><small id="stockValueLabel">{{ $serialSearch !== '' || $nature || $productTypeId ? 'Filtered Stock Value' : 'Overall Stock Value' }}</small><b id="stockTotalValue">Rs {{ number_format($overallValue,2) }}</b><div id="stockTotalsScope" class="text-muted small">{{ $items->count() }} items (all pages)</div></div>
+    <div class="metric"><small id="stockQuantityLabel">{{ $serialSearch !== '' || $nature || $productTypeId ? 'Filtered Quantity' : 'Overall Quantity' }}</small><b id="stockTotalQuantity">{{ number_format($overallQty,3) }}</b></div>
     <div class="metric"><small>{{ \Carbon\Carbon::parse($month.'-01')->format('M Y') }} Stock In</small><b class="text-success">Rs {{ number_format($monthIn,2) }}</b></div>
     <div class="metric"><small>{{ \Carbon\Carbon::parse($month.'-01')->format('M Y') }} Stock Out</small><b class="text-danger">Rs {{ number_format($monthOut,2) }}</b></div>
 </div>
@@ -46,6 +46,8 @@
             @php $isLow = $item->low_stock_qty && $item->current_stock <= $item->low_stock_qty; @endphp
             @php $isRawMaterial = ($item->productType?->nature === 'raw_material'); @endphp
             <tr class="{{ $isLow ? 'low-row' : '' }}"
+                data-stock-value-paise="{{ (int) round((float)$item->calculated_stock_value * 100) }}"
+                data-stock-quantity-milli="{{ (int) round((float)$item->current_stock * 1000) }}"
                 data-nature="{{ $item->productType?->nature }}"
                 data-category-id="{{ $item->product_category_id ?: '' }}"
                 data-activity-date="{{ optional($item->stock_activity_date)->format('Y-m-d') }}">
@@ -267,6 +269,27 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <script>
 const stockTable = $('#stockTable').DataTable({pageLength:25,order:[[0,'asc']]});
+const stockHasServerFilters = @json($serialSearch !== '' || (bool) $nature || (bool) $productTypeId);
+
+function updateStockTotals() {
+    let valuePaise = 0;
+    let quantityMilli = 0;
+    const matchingRows = stockTable.rows({search:'applied', page:'all'});
+    matchingRows.every(function() {
+        const row = this.node();
+        valuePaise += Number(row.dataset.stockValuePaise);
+        quantityMilli += Number(row.dataset.stockQuantityMilli);
+    });
+    const filtered = stockHasServerFilters || matchingRows.count() !== stockTable.rows().count();
+    $('#stockValueLabel').text(filtered ? 'Filtered Stock Value' : 'Overall Stock Value');
+    $('#stockQuantityLabel').text(filtered ? 'Filtered Quantity' : 'Overall Quantity');
+    $('#stockTotalValue').text('Rs ' + (valuePaise / 100).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}));
+    $('#stockTotalQuantity').text((quantityMilli / 1000).toLocaleString('en-IN', {minimumFractionDigits:3, maximumFractionDigits:3}));
+    $('#stockTotalsScope').text(matchingRows.count() + (filtered ? ' matching items (all pages)' : ' items (all pages)'));
+}
+
+stockTable.on('draw', updateStockTotals);
+updateStockTotals();
 $('#openReplacementItems').on('click',function(){$('#replacementDrawer').addClass('open');});
 $('#closeReplacementItems').on('click',function(){$('#replacementDrawer').removeClass('open');});
 let stockPdfPeriod = 'all';
