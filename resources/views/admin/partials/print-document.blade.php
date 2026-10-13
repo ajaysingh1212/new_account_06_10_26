@@ -20,7 +20,7 @@
     $shippingAddress = $shippingAddress ?: (($party ?? null)?->shipping_address ?? '');
 
     /* ── Amount in Words ── */
-    function numberToWordsIN(float $amount): string {
+    $numberToWordsIN = function(float $amount): string {
         $ones  = ['','One','Two','Three','Four','Five','Six','Seven','Eight','Nine','Ten',
                   'Eleven','Twelve','Thirteen','Fourteen','Fifteen','Sixteen','Seventeen',
                   'Eighteen','Nineteen'];
@@ -41,8 +41,8 @@
         $result .= ' Rupees';
         if ($paise)  $result .= ' and '.$words($paise).' Paise';
         return $result.' Only';
-    }
-    $amountInWords = numberToWordsIN($grandTotal);
+    };
+    $amountInWords = $numberToWordsIN($grandTotal);
 @endphp
 <!DOCTYPE html>
 <html lang="en" data-theme="light">
