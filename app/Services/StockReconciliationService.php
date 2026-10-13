@@ -26,13 +26,9 @@ class StockReconciliationService
             $billPaise = $this->paise($bill->grand_total);
             $purchasePaise += $billPaise;
             $lineTotal = (float) $bill->items->sum('line_total');
-            $remaining = $billPaise;
-            foreach ($bill->items->values() as $index => $line) {
-                // Allocate the bill's final amount, including its overall discount.
-                $allocated = $index === $bill->items->count() - 1 ? $remaining
-                    : ($lineTotal > 0 ? (int) round($billPaise * (float) $line->line_total / $lineTotal) : 0);
-                $remaining -= $allocated;
-                $purchaseByItem[$line->item_id] = ($purchaseByItem[$line->item_id] ?? 0) + $allocated;
+            $billValues = app(PurchaseStockValueService::class)->itemValues($bill->items, (float) $bill->grand_total);
+            foreach ($billValues as $itemId => $allocated) {
+                $purchaseByItem[$itemId] = ($purchaseByItem[$itemId] ?? 0) + $allocated;
             }
 
             $billMovements = $purchaseMovementsByBill->get($bill->id, collect());
@@ -40,7 +36,7 @@ class StockReconciliationService
                 $posted = $billMovements->where('item_id', $itemId);
                 $postedValue = $posted->sum(fn($m) => ($m->direction === 'in' ? 1 : -1) * $this->paise($m->total_value));
                 $postedQty = $posted->sum(fn($m) => ($m->direction === 'in' ? 1 : -1) * (float) $m->quantity);
-                $linePaise = $lines->sum(fn($line) => $this->paise($line->line_total));
+                $linePaise = $billValues[$itemId] ?? 0;
                 if ($postedValue !== $linePaise || abs($postedQty - (float) $lines->sum('quantity')) > 0.0005) {
                     $billIssues[] = [
                         'bill' => $bill,
@@ -55,12 +51,13 @@ class StockReconciliationService
                 }
             }
             $headerDifference = $this->paise($lineTotal) - $billPaise;
-            if ($headerDifference !== 0 || $bill->items->isEmpty()) {
+            $billPostedPaise = $billMovements->sum(fn($m) => ($m->direction === 'in' ? 1 : -1) * $this->paise($m->total_value));
+            if (($headerDifference !== 0 && $billPostedPaise !== $billPaise) || $bill->items->isEmpty()) {
                 $billIssues[] = [
                     'bill' => $bill, 'item_id' => null, 'item_name' => 'Bill total / overall discount',
-                    'bill_value' => $billPaise / 100, 'posted_value' => $this->paise($lineTotal) / 100,
+                    'bill_value' => $billPaise / 100, 'posted_value' => $billPostedPaise / 100,
                     'bill_qty' => null, 'posted_qty' => null,
-                    'reason' => $bill->items->isEmpty() ? 'Bill has an amount but no item lines.' : 'Item lines and final bill total differ. Overall bill discount is not included in the original stock postings.',
+                    'reason' => $bill->items->isEmpty() ? 'Bill has an amount but no item lines.' : 'Final bill amount after overall discount differs from recorded stock postings. Save the corrected purchase bill again to reconcile its stock value.',
                 ];
             }
         }

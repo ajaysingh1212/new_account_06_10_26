@@ -19,6 +19,7 @@ use App\Models\TermsTemplate;
 use App\Services\AccountingService;
 use App\Services\EntryVisibilityService;
 use App\Services\PartyAdvanceService;
+use App\Services\PurchaseStockValueService;
 use App\Services\SerialUnitService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -138,6 +139,7 @@ class PurchaseBillController extends Controller
         $data = $this->validated($request);
 
         DB::transaction(function () use ($request, $data, $purchase, $accounting, $visibility, $advances) {
+            $purchase = PurchaseBill::whereKey($purchase->id)->lockForUpdate()->firstOrFail();
             $purchase->load('items');
             $oldValues = $purchase->replicate()->toArray();
             $oldValues['items'] = $purchase->items->toArray();
@@ -162,10 +164,9 @@ class PurchaseBillController extends Controller
                 'attachment' => $attachment,
             ]));
 
-            if ($repostStock) {
-                $totals = $this->replaceLinesWithStockDeltas($request, $purchase, $accounting);
-                $purchase->update($totals);
-            }
+            // Reconcile even an unchanged re-save: older price-only edits left stale stock values.
+            $totals = $this->replaceLinesWithStockDeltas($request, $purchase, $accounting, $linesChanged);
+            $purchase->update($totals);
 
             if ($repostLedger && $purchase->purchase_type === 'credit' && $purchase->party_id) {
                 $accounting->postPartyLedger($purchase->party, [
@@ -390,8 +391,10 @@ class PurchaseBillController extends Controller
 
     private function storeLines(Request $request, PurchaseBill $bill, AccountingService $accounting, string $mode): array
     {
-        $subtotal = $tax = $lineDiscount = 0;
-        foreach ($this->purchaseLineRows($request, $bill) as $row) {
+        $rows = $this->purchaseLineRows($request, $bill);
+        $totals = $this->purchaseTotals($rows, (float) ($request->discount_amount ?? 0));
+        $values = app(PurchaseStockValueService::class)->lineValues($rows, $totals['grand_total']);
+        foreach ($rows as $index => $row) {
             PurchaseBillItem::create($row['attributes']);
             $accounting->moveStock($row['item'], [
                 'party_id' => $bill->party_id,
@@ -400,41 +403,39 @@ class PurchaseBillController extends Controller
                 'direction' => 'in',
                 'quantity' => $row['quantity'],
                 'unit_price' => $row['unit_price'],
-                'total_value' => $row['line_total'],
+                'total_value' => $values[$index] / 100,
                 'reference_type' => PurchaseBill::class,
                 'reference_id' => $bill->id,
                 'reference_no' => $bill->invoice_no,
                 'description' => 'Purchase stock in.',
                 'movement_units' => $row['attributes']['selected_units'],
             ]);
-            $subtotal += $row['base'];
-            $tax += $row['tax_amount'];
-            $lineDiscount += $row['discount_amount'];
         }
-        $overallDiscount = (float) ($request->discount_amount ?? 0);
-        return [
-            'subtotal' => $subtotal,
-            'discount_amount' => $lineDiscount + $overallDiscount,
-            'tax_amount' => $tax,
-            'grand_total' => max(0, $subtotal - $lineDiscount - $overallDiscount + $tax),
-        ];
+        return $totals;
     }
 
-    private function replaceLinesWithStockDeltas(Request $request, PurchaseBill $bill, AccountingService $accounting): array
+    private function replaceLinesWithStockDeltas(Request $request, PurchaseBill $bill, AccountingService $accounting, bool $replaceLines): array
     {
         $oldQtyByItem = $bill->items
             ->groupBy('item_id')
             ->map(fn($lines) => (float) $lines->sum('quantity'))
             ->all();
         $newRows = $this->purchaseLineRows($request, $bill);
+        $totals = $this->purchaseTotals($newRows, (float) ($request->discount_amount ?? 0));
+        $targetValues = app(PurchaseStockValueService::class)->itemValues($newRows, $totals['grand_total']);
+        $postedValues = StockMovement::where('company_id', $bill->company_id)
+            ->where('reference_type', PurchaseBill::class)->where('reference_id', $bill->id)
+            ->get()->groupBy('item_id')
+            ->map(fn($rows) => $rows->sum(fn($m) => ($m->direction === 'in' ? 1 : -1) * (int) round((float) $m->total_value * 100)))->all();
         $newQtyByItem = collect($newRows)
             ->groupBy('item_id')
             ->map(fn($rows) => (float) collect($rows)->sum('quantity'))
             ->all();
 
-        foreach (array_unique(array_merge(array_keys($oldQtyByItem), array_keys($newQtyByItem))) as $itemId) {
+        foreach (array_unique(array_merge(array_keys($oldQtyByItem), array_keys($newQtyByItem), array_keys($postedValues))) as $itemId) {
             $delta = round((float) ($newQtyByItem[$itemId] ?? 0) - (float) ($oldQtyByItem[$itemId] ?? 0), 3);
-            if (abs($delta) < 0.0005) {
+            $valueDelta = ($targetValues[$itemId] ?? 0) - ($postedValues[$itemId] ?? 0);
+            if (abs($delta) < 0.0005 && $valueDelta === 0) {
                 continue;
             }
 
@@ -442,33 +443,50 @@ class PurchaseBillController extends Controller
             $matchingRows = collect($newRows)->where('item_id', (int) $itemId);
             $unitPrice = (float) ($matchingRows->last()['unit_price'] ?? $bill->items->firstWhere('item_id', (int) $itemId)?->unit_price ?? 0);
 
-            $accounting->moveStock($item, [
+            $movementData = [
                 'party_id' => $bill->party_id,
                 'movement_date' => $bill->billing_date,
                 'movement_type' => $delta > 0 ? 'purchase_update_delta' : 'purchase_update_reversal_delta',
                 'direction' => $delta > 0 ? 'in' : 'out',
                 'quantity' => abs($delta),
                 'unit_price' => $unitPrice,
-                'total_value' => abs($delta) * $unitPrice,
+                'total_value' => 0,
                 'reference_type' => PurchaseBill::class,
                 'reference_id' => $bill->id,
                 'reference_no' => $bill->invoice_no,
                 'description' => 'Purchase stock delta from bill update.',
                 'movement_units' => [],
-            ]);
+            ];
+            // Quantity and value can change independently, even in opposite directions.
+            if (abs($delta) >= 0.0005) {
+                $accounting->moveStock($item, $movementData);
+            }
+            if ($valueDelta !== 0) {
+                $accounting->moveStock($item, array_merge($movementData, [
+                    'movement_type' => 'purchase_value_adjustment',
+                    'direction' => $valueDelta > 0 ? 'in' : 'out',
+                    'quantity' => 0,
+                    'unit_price' => 0,
+                    'total_value' => abs($valueDelta) / 100,
+                    'description' => 'Purchase stock value reconciled to updated bill rates, GST and discounts.',
+                ]));
+            }
         }
 
-        $bill->items()->delete();
-
-        $subtotal = $tax = $lineDiscount = 0;
-        foreach ($newRows as $row) {
-            PurchaseBillItem::create($row['attributes']);
-            $subtotal += $row['base'];
-            $tax += $row['tax_amount'];
-            $lineDiscount += $row['discount_amount'];
+        if ($replaceLines) {
+            $bill->items()->delete();
+            foreach ($newRows as $row) {
+                PurchaseBillItem::create($row['attributes']);
+            }
         }
+        return $totals;
+    }
 
-        $overallDiscount = (float) ($request->discount_amount ?? 0);
+    private function purchaseTotals(array $rows, float $overallDiscount): array
+    {
+        $subtotal = (float) collect($rows)->sum('base');
+        $tax = (float) collect($rows)->sum('tax_amount');
+        $lineDiscount = (float) collect($rows)->sum('discount_amount');
         return [
             'subtotal' => $subtotal,
             'discount_amount' => $lineDiscount + $overallDiscount,

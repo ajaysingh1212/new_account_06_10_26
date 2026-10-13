@@ -36,18 +36,18 @@ class StockReconciliationTest extends TestCase
             ->assertViewHas('stockReconciliation', fn($r) => $r['stock_value'] === 212.4);
     }
 
-    public function test_overall_bill_discount_is_identified_in_the_difference_details(): void
+    public function test_overall_bill_discount_is_included_in_stock_cost(): void
     {
         [$user, $company, $item] = $this->context();
         $this->postPurchase($item, 10);
         $response = $this->get(route('admin.stocks.index'));
-        $response->assertOk()->assertSee('View difference reasons')->assertSee('Overall bill discount');
+        $response->assertOk()->assertSee('Purchase and stock totals match');
         $report = $response->viewData('stockReconciliation');
         $this->assertSame(202.4, $report['purchase_amount']);
-        $this->assertSame(212.4, $report['stock_value']);
-        $this->assertEquals(10, $report['difference']);
-        $this->assertEquals(10, $report['unexplained_difference']);
-        $this->assertCount(1, $report['bill_issues']);
+        $this->assertSame(202.4, $report['stock_value']);
+        $this->assertEquals(0, $report['difference']);
+        $this->assertEquals(0, $report['unexplained_difference']);
+        $this->assertCount(0, $report['bill_issues']);
     }
 
     public function test_missing_posting_and_price_only_bill_edits_are_reported(): void
