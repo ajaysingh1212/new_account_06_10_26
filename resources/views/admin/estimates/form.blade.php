@@ -2,6 +2,7 @@
 <style>.trade-shell{background:#fff;border-radius:16px;box-shadow:0 10px 32px rgba(44,24,94,.10);overflow:hidden}.trade-hero{background:linear-gradient(135deg,#4338ca,#2563eb);color:#fff;padding:24px}.trade-hero h2{font-weight:800;margin:0}.trade-section{padding:22px;border-bottom:1px solid #eef2ff}.trade-title{font-size:12px;font-weight:800;color:#2563eb;text-transform:uppercase;letter-spacing:.8px}.total-box{background:#111827;color:#fff;border-radius:14px;padding:18px}.total-row{display:flex;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,.08);padding:8px 0}.total-row:last-child{border-bottom:0;font-size:18px;font-weight:800;color:#22c55e}</style>
 @endpush
 @php $estimate = $estimate ?? new \App\Models\Estimate; $isEdit = $estimate->exists; @endphp
+@include('admin.estimates.partials.unit-picker')
 <form method="POST" action="{{ $isEdit ? route('admin.estimates.update', $estimate) : route('admin.estimates.store') }}" enctype="multipart/form-data">@csrf @if($isEdit) @method('PUT') @endif
 <div class="trade-shell">
 <div class="trade-hero"><h2><i class="fas fa-file-contract mr-2"></i> Estimate / Quotation</h2><div>Create quotation now, convert to sales invoice after approval.</div></div>

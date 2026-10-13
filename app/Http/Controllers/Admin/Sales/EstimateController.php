@@ -95,6 +95,7 @@ class EstimateController extends Controller
                 'description' => $line->description,
                 'weight' => (float) ($item?->per_quantity_weight ?? 0),
                 'current_stock' => (float) ($item?->current_stock ?? 0),
+                'selected_units' => $line->selected_units ?? [],
             ];
         })->values();
 
@@ -135,6 +136,7 @@ class EstimateController extends Controller
         $data = $this->validated($request);
 
         DB::transaction(function () use ($request, $estimate, $data, $visibility) {
+            $estimate->load('items');
             $attachment = $request->hasFile('attachment')
                 ? $request->file('attachment')->store('estimate-attachments', 'public')
                 : $estimate->attachment;
@@ -355,6 +357,7 @@ class EstimateController extends Controller
             'costCenters' => CostCenter::where('company_id', $companyId)->where('status', 'active')->get(),
             'subCostCenters' => SubCostCenter::where('company_id', $companyId)->where('status', 'active')->get(),
             'estimateNo' => $this->nextNo(),
+            'unitPool' => app(SerialUnitService::class)->unitPool($companyId),
         ];
     }
 
@@ -385,15 +388,36 @@ class EstimateController extends Controller
             'discount_value.*' => ['nullable','numeric','min:0'],
             'tax_mode.*' => ['nullable','in:with_gst,without_gst'],
             'tax_percent.*' => ['nullable','numeric','min:0'],
+            'selected_units' => ['nullable', 'array'],
+            'selected_units.*' => ['nullable', 'json'],
         ]);
     }
 
     private function storeLines(Request $request, Estimate $estimate): array
     {
         $subtotal = $tax = $lineDiscount = 0;
+        $serialUnits = app(SerialUnitService::class);
+        $unitPool = $serialUnits->unitPool($estimate->company_id);
+        $savedUnits = $estimate->items->groupBy('item_id')->map(fn($lines) => $lines->flatMap(fn($line) => $line->selected_units ?? []));
+        $usedKeys = [];
         foreach ($request->item_id as $i => $itemId) {
             $item = Item::with('productType')->findOrFail($itemId);
+            abort_if((int) $item->company_id !== (int) $estimate->company_id, 422, 'Selected item does not belong to the current company.');
             $qty = (float) $request->quantity[$i];
+            $requestedUnits = json_decode($request->input("selected_units.$i", '[]') ?: '[]', true);
+            abort_unless(is_array($requestedUnits) && array_is_list($requestedUnits), 422, 'Invalid selected estimate units.');
+            abort_if(count($requestedUnits) > $qty, 422, 'Selected unit count cannot exceed quotation quantity.');
+            $knownUnits = collect($unitPool[$item->id] ?? [])->where('sold', false)
+                ->merge($savedUnits->get($item->id, collect()))
+                ->keyBy(fn($unit) => $serialUnits->scopeUnitKey((int) $item->id, $unit));
+            $selectedUnits = [];
+            foreach ($requestedUnits as $unit) {
+                abort_unless(is_array($unit), 422, 'Invalid selected estimate unit.');
+                $key = $serialUnits->scopeUnitKey((int) $item->id, $unit);
+                abort_unless($key && $knownUnits->has($key) && !isset($usedKeys[$key]), 422, 'Select valid, unique units for the quotation item.');
+                $selectedUnits[] = $knownUnits->get($key);
+                $usedKeys[$key] = true;
+            }
             abort_if($item->productType?->nature !== 'finished_goods', 422, 'Only finished goods can be used in Estimate / Quotation.');
             $price = (float) $request->unit_price[$i];
             $base = $qty * $price;
@@ -419,6 +443,7 @@ class EstimateController extends Controller
                 'tax_percent' => $taxPercent,
                 'tax_amount' => $taxAmount,
                 'line_total' => $total,
+                'selected_units' => $selectedUnits,
             ]);
 
             $subtotal += max(0, $grossAfterDiscount - $taxAmount);

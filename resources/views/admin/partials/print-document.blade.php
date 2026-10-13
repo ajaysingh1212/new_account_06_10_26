@@ -228,6 +228,7 @@ table.items td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-
 table.items td:not(:last-child){border-right:1px solid var(--border)}
 .item-name{font-weight:600;color:var(--text)}
 .item-desc{font-size:11px;color:var(--muted);margin-top:2px}
+.item-identifiers{font-size:11px;line-height:1.5;margin-top:5px;overflow-wrap:anywhere;color:var(--text)}
 .amount-cell{font-weight:700;color:var(--text);text-align:right;white-space:nowrap}
 .num-cell{text-align:right;white-space:nowrap}
 .tfoot-row td{
@@ -458,6 +459,7 @@ table.items td:not(:last-child){border-right:1px solid var(--border)}
             <td>
               <div class="item-name">{{ $line->item?->name }}</div>
               @if($line->description)<div class="item-desc">{{ $line->description }}</div>@endif
+              @include('admin.partials.print-unit-identifiers', ['units' => $line->selected_units ?? []])
             </td>
             <td style="color:var(--muted);font-size:12px">{{ $line->item?->item_code }}</td>
             <td class="num-cell">{{ number_format((float)$line->quantity,2) }}</td>
