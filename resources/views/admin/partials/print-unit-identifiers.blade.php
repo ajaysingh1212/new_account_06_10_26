@@ -9,7 +9,12 @@
             ])->map(fn($value) => trim((string) $value))->filter(fn($value) => $value !== '');
         @endphp
         @if($identifiers->isNotEmpty())
-            <div class="item-identifiers">@foreach($identifiers as $label => $value)<span><strong>{{ $label }}:</strong> {{ $value }}</span>@if(!$loop->last) <span aria-hidden="true"> | </span> @endif@endforeach</div>
+            <div class="item-identifiers">
+                @foreach($identifiers as $label => $value)
+                    <span><strong>{{ $label }}:</strong> {{ $value }}</span>
+                    @if(!$loop->last) <span aria-hidden="true"> | </span> @endif
+                @endforeach
+            </div>
         @endif
     @endif
 @endforeach
