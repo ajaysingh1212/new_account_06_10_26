@@ -14,6 +14,7 @@ use App\Models\StockMovement;
 use App\Models\StockOutChallan;
 use App\Services\EntryVisibilityService;
 use App\Services\SerialUnitService;
+use App\Services\StockReconciliationService;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Http\Request;
@@ -31,6 +32,7 @@ class StockController extends Controller
         $companyId = auth()->user()->current_company_id;
         $serialsByItem = $this->currentSerialsByItem();
         $serialItemIds = $this->serialTrackedItemIds($companyId);
+        $stockReconciliation = app(StockReconciliationService::class)->report($companyId, $serialsByItem, $serialItemIds);
         $incomingByItem = PurchaseEstimateItem::whereHas('purchaseEstimate', fn($q) => $q->where('company_id',$companyId)->where('status','transit'))
             ->selectRaw('item_id, SUM(quantity) as incoming_qty')->groupBy('item_id')->pluck('incoming_qty','item_id');
         $items = Item::with(['productType', 'productCategory'])
@@ -65,12 +67,13 @@ class StockController extends Controller
             })->values();
         }
 
-        $items->each(function ($item) use ($serialsByItem, $serialItemIds) {
+        $items->each(function ($item) use ($serialsByItem, $serialItemIds, $stockReconciliation) {
             if ($serialItemIds->contains((int) $item->id)) {
                 $item->current_stock = count($serialsByItem[$item->id] ?? []);
             }
-            $item->calculated_stock_value = round((float) $item->current_stock * (float) $item->purchase_price, 2);
-            $item->calculated_avg_rate = (float) $item->purchase_price;
+            $valuation = $stockReconciliation['valuations'][$item->id];
+            $item->calculated_stock_value = $valuation['value'];
+            $item->calculated_avg_rate = $valuation['avg_rate'];
         });
 
         $itemIds = $items->pluck('id');
@@ -124,7 +127,7 @@ class StockController extends Controller
             ])
             ->values();
 
-        return view('admin.stocks.index', compact('items', 'overallValue', 'overallQty', 'month', 'nature', 'productTypeId', 'productTypes', 'productCategories', 'monthIn', 'monthOut', 'serialsByItem', 'serialSearch','incomingByItem', 'replacementReceived', 'companyAdmin'));
+        return view('admin.stocks.index', compact('items', 'overallValue', 'overallQty', 'month', 'nature', 'productTypeId', 'productTypes', 'productCategories', 'monthIn', 'monthOut', 'serialsByItem', 'serialSearch','incomingByItem', 'replacementReceived', 'companyAdmin', 'stockReconciliation'));
     }
 
     public function history(Request $request, EntryVisibilityService $visibility)
@@ -309,6 +312,7 @@ class StockController extends Controller
         $today = now();
 
         [$from, $to] = match ($period) {
+            'all' => ['1000-01-01', '9999-12-31'],
             'today' => [$today->toDateString(), $today->toDateString()],
             'week' => [$today->copy()->startOfWeek()->toDateString(), $today->copy()->endOfWeek()->toDateString()],
             'year' => [$today->copy()->startOfYear()->toDateString(), $today->copy()->endOfYear()->toDateString()],
@@ -337,6 +341,8 @@ class StockController extends Controller
                 'previous_stock' => $previousStock,
                 'change' => $movement->direction === 'in' ? (float) $movement->quantity : -(float) $movement->quantity,
                 'new_stock' => (float) $movement->stock_after,
+                'value_change' => ($movement->direction === 'in' ? 1 : -1) * (float) $movement->total_value,
+                'value_after' => (float) $movement->value_after,
                 'party' => $movement->party?->display_name,
                 'reference' => $movement->reference_no,
                 'note' => $movement->description,
@@ -354,6 +360,8 @@ class StockController extends Controller
                 'previous_stock' => (float) $adjustment->previous_stock,
                 'change' => (float) $adjustment->stock_change,
                 'new_stock' => (float) $adjustment->new_stock,
+                'value_change' => (float) $adjustment->new_stock_value - (float) $adjustment->previous_stock_value,
+                'value_after' => (float) $adjustment->new_stock_value,
                 'party' => null,
                 'reference' => 'Manual stock maintenance',
                 'note' => $adjustment->note,

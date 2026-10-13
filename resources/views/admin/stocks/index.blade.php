@@ -28,6 +28,20 @@
     <div class="metric"><small>{{ \Carbon\Carbon::parse($month.'-01')->format('M Y') }} Stock Out</small><b class="text-danger">Rs {{ number_format($monthOut,2) }}</b></div>
 </div>
 
+<div class="card border-{{ $stockReconciliation['difference'] != 0 ? 'warning' : 'success' }} mb-3">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center flex-wrap mb-2">
+            <div><strong>Purchase vs Stock Valuation</strong><div class="text-muted small">Current company · All time · All items, independent of table search</div></div>
+            <button type="button" class="btn btn-{{ $stockReconciliation['difference'] != 0 ? 'warning' : 'outline-success' }} btn-sm" data-toggle="modal" data-target="#stockReconciliationModal">{{ $stockReconciliation['difference'] != 0 ? 'View difference reasons' : 'View reconciliation' }}</button>
+        </div>
+        <div class="row">
+            <div class="col-md-4 mb-2"><button type="button" class="btn btn-light border text-left w-100" data-toggle="modal" data-target="#stockReconciliationModal"><small class="d-block text-muted">Total Purchase Amount</small><strong>Rs {{ number_format($stockReconciliation['purchase_amount'], 2) }}</strong><small class="d-block">{{ $stockReconciliation['bill_count'] }} posted bills · GST and discounts included</small></button></div>
+            <div class="col-md-4 mb-2"><button type="button" class="btn btn-light border text-left w-100" data-toggle="modal" data-target="#stockReconciliationModal"><small class="d-block text-muted">Total Stock Valuation</small><strong>Rs {{ number_format($stockReconciliation['stock_value'], 2) }}</strong><small class="d-block">Available stock at recorded cost</small></button></div>
+            <div class="col-md-4 mb-2"><button type="button" class="btn btn-light border text-left w-100" data-toggle="modal" data-target="#stockReconciliationModal"><small class="d-block text-muted">Stock − Purchase Difference</small><strong class="{{ $stockReconciliation['difference'] != 0 ? 'text-danger' : 'text-success' }}">Rs {{ number_format($stockReconciliation['difference'], 2) }}</strong><small class="d-block">{{ $stockReconciliation['difference'] != 0 ? 'Click to see where the amounts differ' : 'Purchase and stock totals match' }}</small></button></div>
+        </div>
+    </div>
+</div>
+
 <form method="GET" class="filter-card">
     <div class="row align-items-end">
         <div class="col-md-3 form-group mb-md-0"><label>Month Wise Valuation</label><input type="month" name="month" value="{{ $month }}" class="form-control"></div>
@@ -73,7 +87,7 @@
                     @if($stockUnits->count() > 10)<small class="text-muted">+{{ $stockUnits->count() - 10 }} more</small>@endif
                     <span class="d-none">{{ $stockUnits->flatMap(fn($unit) => [$unit['serial_no'] ?? null, $unit['vts_sim'] ?? null, $unit['sku'] ?? null, $unit['batch_no'] ?? null])->filter()->join(' ') }}</span>
                 </td>
-                <td>Rs {{ number_format((float)$item->purchase_price,2) }}</td>
+                <td>Rs {{ number_format((float)$item->calculated_avg_rate,2) }}<small class="d-block text-muted">Average stock cost</small></td>
                 <td>Rs {{ number_format((float)$item->calculated_stock_value,2) }}</td>
                 <td>@if($isLow)<span class="badge badge-warning">Low Stock</span>@else <span class="badge badge-success">OK</span>@endif</td>
                 <td>{{ ucfirst($item->status) }}</td>
@@ -211,6 +225,8 @@
         <div class="alert alert-light border">No approved replacement item has been received yet.</div>
     @endforelse
 </div>
+
+@include('admin.stocks.partials.reconciliation')
 
 <div class="modal fade" id="stockAdjustModal" tabindex="-1" role="dialog" aria-hidden="true">
     <div class="modal-dialog modal-lg modal-dialog-centered" role="document">

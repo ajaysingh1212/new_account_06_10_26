@@ -5,7 +5,7 @@
     <div class="card-body">
         <form method="GET" class="row align-items-end">
             <div class="col-md-3"><label>Item</label><select name="item_id" class="form-control select2"><option value="">All Items</option>@foreach($items as $item)<option value="{{ $item->id }}" @selected(request('item_id')==$item->id)>{{ $item->name }}</option>@endforeach</select></div>
-            <div class="col-md-2"><label>Period</label><select name="period" class="form-control" id="movementPeriod"><option value="today" @selected($period==='today')>Today</option><option value="week" @selected($period==='week')>This Week</option><option value="month" @selected($period==='month')>This Month</option><option value="year" @selected($period==='year')>This Year</option><option value="custom" @selected($period==='custom')>Custom Date</option></select></div>
+            <div class="col-md-2"><label>Period</label><select name="period" class="form-control" id="movementPeriod"><option value="all" @selected($period==='all')>All Time</option><option value="today" @selected($period==='today')>Today</option><option value="week" @selected($period==='week')>This Week</option><option value="month" @selected($period==='month')>This Month</option><option value="year" @selected($period==='year')>This Year</option><option value="custom" @selected($period==='custom')>Custom Date</option></select></div>
             <div class="col-md-2 custom-date"><label>From</label><input type="date" name="from_date" class="form-control" value="{{ $from }}"></div>
             <div class="col-md-2 custom-date"><label>To</label><input type="date" name="to_date" class="form-control" value="{{ $to }}"></div>
             <div class="col-md-3"><label>Serial / SKU</label><input name="q" class="form-control" value="{{ $serialSearch }}" placeholder="Serial / VTS / SKU / reference"><button class="btn btn-primary mt-2">Filter</button><a href="{{ route('admin.stocks.history') }}" class="btn btn-light mt-2">Reset</a></div>
@@ -15,7 +15,7 @@
 <div class="card">
     <div class="card-body table-responsive">
         <table id="historyTable" class="table table-hover">
-            <thead><tr><th>Type</th><th>Date</th><th>Item</th><th>Event</th><th>Previous Qty</th><th>Change</th><th>New Qty</th><th>Party / Note</th><th>Ref</th><th>By</th><th>Role</th></tr></thead>
+            <thead><tr><th>Type</th><th>Date</th><th>Item</th><th>Event</th><th>Previous Qty</th><th>Change</th><th>New Qty</th><th>Value Change</th><th>Stock Value After</th><th>Party / Note</th><th>Ref</th><th>By</th><th>Role</th></tr></thead>
             <tbody>
             @foreach($historyRows as $row)
                 <tr>
@@ -43,6 +43,8 @@
                         @endif
                     </td>
                     <td>{{ number_format((float) $row['new_stock'], 3) }}</td>
+                    <td>Rs {{ number_format($row['value_change'], 2) }}</td>
+                    <td>Rs {{ number_format($row['value_after'], 2) }}</td>
                     <td>
                         {{ $row['party'] ?: ($row['note'] ?: '-') }}
                     </td>
