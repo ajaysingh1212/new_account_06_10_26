@@ -443,7 +443,7 @@ table.items td:not(:last-child){border-right:1px solid var(--border)}
           <tr>
             <th style="width:36px">#</th>
             <th>Item &amp; Description</th>
-            <th>HSN/SAC</th>
+            <th>ITEM CODE</th>
             <th class="num-cell">Qty</th>
             <th>Unit</th>
             <th class="num-cell">Rate (₹)</th>
@@ -459,7 +459,7 @@ table.items td:not(:last-child){border-right:1px solid var(--border)}
               <div class="item-name">{{ $line->item?->name }}</div>
               @if($line->description)<div class="item-desc">{{ $line->description }}</div>@endif
             </td>
-            <td style="color:var(--muted);font-size:12px">{{ $line->item?->hsn_code }}</td>
+            <td style="color:var(--muted);font-size:12px">{{ $line->item?->item_code }}</td>
             <td class="num-cell">{{ number_format((float)$line->quantity,2) }}</td>
             <td style="color:var(--muted);font-size:12px">{{ $line->unit }}</td>
             <td class="num-cell">{{ number_format((float)$line->unit_price,2) }}</td>
