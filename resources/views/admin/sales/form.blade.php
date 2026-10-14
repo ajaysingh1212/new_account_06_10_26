@@ -29,16 +29,34 @@
 
 @push('styles')
 <style>
-.trade-shell{background:#fff;border:1px solid #e8edf5;border-radius:8px;box-shadow:0 16px 36px rgba(15,23,42,.08);overflow:hidden}
-.trade-head{background:#122033;color:#fff;padding:22px 24px;display:flex;justify-content:space-between;gap:16px;align-items:center}
+.trade-shell{background:#fff;border:1px solid #e8edf5;border-radius:16px;box-shadow:0 16px 36px rgba(15,23,42,.08);overflow:hidden}
+.trade-head{background:linear-gradient(115deg,#122033,#164e63);color:#fff;padding:28px 24px;display:flex;justify-content:space-between;gap:16px;align-items:center}
 .trade-head h2{font-weight:800;margin:0;font-size:24px;letter-spacing:0}
-.trade-head small{color:#a9b7ca}
+.trade-head small{color:#c5d9e6;display:block;margin-top:6px}
 .trade-section{padding:20px 24px;border-bottom:1px solid #edf1f7}
 .trade-title{font-size:12px;font-weight:800;color:#0f766e;text-transform:uppercase;letter-spacing:.6px;margin-bottom:12px}
-.trade-table{border-collapse:separate;border-spacing:0 14px}
+.trade-table{display:block;width:100%;margin:0}
+.trade-table tbody{display:grid;gap:16px;padding:4px 0}
 .trade-table thead{display:none}
-.trade-table tbody tr{display:grid;grid-template-columns:minmax(320px,1.8fr) minmax(190px,1fr) 80px minmax(230px,1.3fr) 75px 105px 85px 120px 70px 46px;gap:12px;align-items:end;background:#fbfdff;border:1px solid #e5ebf3;border-radius:8px;padding:14px}
+.trade-table tbody tr{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:16px;align-items:start;background:#fff;border:1px solid #dfe7ef;border-radius:12px;padding:18px;box-shadow:0 3px 12px rgba(15,23,42,.03)}
 .trade-table td{display:block;border:0!important;padding:0!important}
+.trade-table td{grid-column:span 2;min-width:0}
+.trade-table .item-cell,.trade-table .desc-cell,.trade-table .serial-cell{grid-column:span 4}
+.trade-table .line-heading,.trade-table .line-footer{grid-column:1 / -1;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.trade-table .line-heading{padding-bottom:12px!important;border-bottom:1px solid #edf1f7!important}
+.trade-table .line-footer{padding-top:14px!important;border-top:1px dashed #dfe7ef!important}
+.trade-table .line-heading:before,.trade-table .line-footer:before{display:none}
+.line-number{color:#0f766e;font-size:12px;font-weight:800;background:#e6f5f3;border-radius:7px;padding:6px 10px}
+.line-amount{color:#0f172a;font-size:17px;font-weight:800;white-space:nowrap}
+.line-amount small{color:#667085;font-size:11px;font-weight:600;margin-right:10px}
+.line-count{background:#edf6f7;color:#0f766e;border-radius:999px;padding:5px 12px;font-size:12px;font-weight:700}
+.trade-items{background:#f6f9fc}
+.trade-shell label{font-size:12px;font-weight:600;color:#475569}
+.trade-shell .form-control:focus{border-color:#0d9488;box-shadow:0 0 0 3px rgba(13,148,136,.1)}
+.trade-shell .select2-container{max-width:100%}
+.trade-shell .select2-container--default .select2-selection--single{border-color:#ced4da;border-radius:6px;min-height:38px}
+.trade-actions{background:#f8fafc;border-top:1px solid #edf1f7;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:20px 24px}
+.trade-actions .btn-primary{background:#0f766e;border-color:#0f766e;border-radius:9px}
 .trade-table td:before{content:attr(data-label);display:block;font-size:10px;text-transform:uppercase;color:#667085;font-weight:800;margin-bottom:5px}
 .trade-table .item-cell,.trade-table .desc-cell{min-width:0}
 .total-box{background:#0f172a;color:#fff;border-radius:8px;padding:16px}
@@ -53,6 +71,17 @@
 .unit-card{border:1px solid #e5e7eb;border-radius:8px;padding:10px;margin-bottom:10px;display:grid;grid-template-columns:28px 1fr;gap:10px}
 .unit-card.sold{background:#f9fafb;color:#98a2b3}
 .unit-card.selected{border-color:#0f766e;background:#f0fdfa}
+.unit-card input{margin-top:4px;accent-color:#0f766e}
+.unit-card>span{min-width:0;overflow-wrap:anywhere}
+.unit-search{position:relative;margin-top:16px}
+.unit-search>i{position:absolute;left:12px;top:13px;color:#64748b}
+.unit-search input{padding-left:34px;padding-right:40px}
+.unit-search button{position:absolute;right:3px;top:3px;width:32px;height:32px;color:#64748b}
+.unit-results{font-size:12px;color:#64748b;margin-top:10px}
+.unit-empty{text-align:center;padding:36px 16px;color:#64748b}
+.unit-empty i{display:block;font-size:26px;margin-bottom:12px;color:#94a3b8}
+.unit-foot{padding:14px 18px;border-top:1px solid #e5e7eb;background:#f8fafc;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.unit-foot .btn{background:#0f766e;border-color:#0f766e}
 .unit-meta{font-size:12px;color:#667085}
 .selected-pill{display:inline-flex;align-items:center;gap:6px;border:1px solid #99f6e4;background:#f0fdfa;color:#0f766e;border-radius:999px;padding:3px 9px;font-size:12px;margin:2px}
 .advance-panel{border:1px solid #bfdbfe;background:linear-gradient(135deg,#eff6ff,#f8fafc);border-radius:10px;padding:16px;margin-top:12px}
@@ -69,8 +98,8 @@
 .disc-limit-badge{display:none;font-size:10px;font-weight:700;color:#0f766e;margin-top:3px}
 .disc-limit-badge.show{display:block}
 
-@media(max-width:1400px){.trade-table tbody tr{grid-template-columns:1fr 1fr 80px 1fr 75px 105px 85px 120px 70px 46px}}
-@media(max-width:768px){.trade-table tbody tr{grid-template-columns:1fr}}
+@media(max-width:1100px){.trade-table .item-cell,.trade-table .desc-cell{grid-column:span 6}.trade-table .serial-cell{grid-column:span 12}.trade-table td{grid-column:span 4}}
+@media(max-width:576px){.trade-section{padding:16px}.trade-head{padding:22px 16px}.trade-head h2{font-size:20px}.trade-table tbody tr{padding:14px;gap:14px}.trade-table td{grid-column:span 6}.trade-table .item-cell,.trade-table .desc-cell{grid-column:span 12}.trade-actions{padding:16px;flex-wrap:wrap}.trade-actions .btn{width:100%}.line-amount small{display:block;margin:0}.unit-drawer{max-width:100vw}}
 </style>
 @endpush
 
@@ -81,7 +110,7 @@
     <div class="trade-head">
         <div>
             <h2><i class="fas fa-file-invoice-dollar mr-2"></i>{{ $isEdit ? 'Edit Sales Invoice' : 'Sales Invoice' }}</h2>
-            <small>Finished goods only, serial-aware selection, stock out and party ledger posting.</small>
+            <small>Add your items, choose serial numbers and review your invoice.</small>
         </div>
         <a href="{{ route('admin.sales.index') }}" class="btn btn-outline-light btn-sm"><i class="fas fa-arrow-left mr-1"></i> Back</a>
     </div>
@@ -224,10 +253,10 @@
     </div>
 
     {{-- ── Line Items ── --}}
-    <div class="trade-section">
+    <div class="trade-section trade-items">
         <div class="d-flex justify-content-between align-items-center mb-2">
-            <div class="trade-title mb-0">Items</div>
-            <button type="button" id="addLine" class="btn btn-outline-primary btn-sm"><i class="fas fa-plus"></i> Add Row</button>
+            <div><div class="trade-title mb-1">Invoice Items</div><small class="text-muted">Choose a product and its serials. Add the next row below any item.</small></div>
+            <span class="line-count" id="lineCount" aria-live="polite">0 items</span>
         </div>
         <div class="table-responsive">
             <table class="table trade-table" id="lineTable">
@@ -285,7 +314,8 @@
         @include('admin.partials.entry-visibility', ['entry' => $invoice ?? null])
     </div>
 
-    <div class="p-4 text-right">
+    <div class="trade-actions">
+        <span class="text-muted small"><i class="fas fa-check-circle mr-1 text-success"></i>Review items, serials and totals before saving.</span>
         <button class="btn btn-primary btn-lg"><i class="fas fa-save mr-1"></i>{{ $isEdit ? 'Update Sale' : 'Post Sale' }}</button>
     </div>
 </div>
@@ -325,14 +355,20 @@
 
 {{-- ── Unit serial drawer ── --}}
 <div class="unit-backdrop" id="unitBackdrop"></div>
-<aside class="unit-drawer" id="unitDrawer">
+<aside class="unit-drawer" id="unitDrawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle" tabindex="-1" inert>
     <div class="unit-head">
         <div class="d-flex justify-content-between align-items-start">
             <div>
                 <b id="drawerTitle">Finished Goods Units</b>
                 <div class="unit-meta" id="drawerHint"></div>
             </div>
-            <button type="button" class="btn btn-light icon-btn" id="closeDrawer"><i class="fas fa-times"></i></button>
+            <button type="button" class="btn btn-light icon-btn" id="closeDrawer" aria-label="Close serial selection"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="unit-search">
+            <label for="unitSearch" class="sr-only">Search serial numbers, SIM, batch or warehouse</label>
+            <i class="fas fa-search" aria-hidden="true"></i>
+            <input type="search" id="unitSearch" class="form-control" placeholder="Search serial, SIM, batch, warehouse..." autocomplete="off" aria-controls="unitList">
+            <button type="button" class="btn btn-sm" id="clearUnitSearch" aria-label="Clear serial search" hidden><i class="fas fa-times"></i></button>
         </div>
         <div class="filter-pills mt-3 btn-group btn-group-sm">
             <button type="button" class="btn btn-primary unit-filter" data-filter="available">Available</button>
@@ -340,13 +376,16 @@
             <button type="button" class="btn btn-outline-secondary unit-filter" data-filter="sold">Sold</button>
             <button type="button" class="btn btn-outline-secondary unit-filter" data-filter="all">All</button>
         </div>
+        <div id="unitResults" class="unit-results" role="status" aria-live="polite"></div>
     </div>
     <div class="unit-list" id="unitList"></div>
+    <div class="unit-foot"><span class="unit-meta">Selections are applied to this item.</span><button type="button" id="doneDrawer" class="btn btn-primary btn-sm"><i class="fas fa-check mr-1"></i> Done</button></div>
 </aside>
 
 {{-- ── Line row template ── --}}
 <template id="lineTpl">
 <tr>
+    <td class="line-heading"><span class="line-number">Item <span class="line-index"></span></span><button type="button" class="btn btn-outline-danger btn-sm remove-row icon-btn" aria-label="Remove item" title="Remove item"><i class="fas fa-trash-alt"></i></button></td>
     <td class="item-cell" data-label="Item">
         <select name="item_id[]" class="form-control item-select select2-item wide-select" required>
             <option value="">Select finished goods</option>
@@ -375,9 +414,9 @@
     <td class="num-cell" data-label="Qty">
         <input type="number" step="1" min="1" name="quantity[]" class="form-control line-qty" value="1" required>
     </td>
-    <td data-label="Serial Selection">
-        <button type="button" class="btn btn-outline-info icon-btn choose-units" title="Select serials">
-            <i class="fas fa-barcode"></i>
+    <td class="serial-cell" data-label="Serial Selection">
+        <button type="button" class="btn btn-outline-info btn-sm choose-units" title="Select serials">
+            <i class="fas fa-barcode mr-1"></i> Choose serials
         </button>
         <input type="hidden" name="selected_units[]" class="selected-units-json">
         <div class="selected-units mt-1"></div>
@@ -407,9 +446,7 @@
     <td class="mini-cell" data-label="Tax %">
         <input type="number" step="0.01" min="0" name="tax_percent[]" class="form-control tax-percent" value="18">
     </td>
-    <td data-label="Action">
-        <button type="button" class="btn btn-danger btn-sm remove-row icon-btn"><i class="fas fa-trash"></i></button>
-    </td>
+    <td class="line-footer"><button type="button" class="btn btn-outline-primary btn-sm add-line"><i class="fas fa-plus mr-1"></i> Add Row</button><span class="line-amount"><small>Line total</small><span class="line-total">Rs 0.00</span></span></td>
 </tr>
 </template>
 
@@ -427,6 +464,9 @@ let activeFilter = 'available';
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function money(n){
     return 'Rs '+(Number(n)||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+function escapeHtml(value){
+    return String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 }
 let availableAdvances = [];
 let existingAdvanceApplications = @json($advanceApplications ?? []);
@@ -490,7 +530,7 @@ function setRowSelected($row, units){
     $row.find('.selected-units-json').val(JSON.stringify(units));
     $row.find('.selected-units').html(
         units.map(u =>
-            `<span class="selected-pill">${u.serial_no||'No serial'}${u.vts_sim?' / '+u.vts_sim:''} <small>${u.production_batch_no||''}</small></span>`
+            `<span class="selected-pill">${escapeHtml(u.serial_no||'No serial')}${u.vts_sim?' / '+escapeHtml(u.vts_sim):''} <small>${escapeHtml(u.production_batch_no||'')}</small></span>`
         ).join('')
     );
     calc();
@@ -575,8 +615,10 @@ function syncTaxMode($row){
 // ── Totals ────────────────────────────────────────────────────────────────────
 function calc(){
     let sub = 0, tax = 0, weight = 0;
-    $('#lineTable tbody tr').each(function(){
+    $('#lineCount').text($('#lineTable tbody tr').length + ' item(s)');
+    $('#lineTable tbody tr').each(function(index){
         const r  = $(this);
+        r.find('.line-index').text(index + 1);
         const q  = +r.find('[name="quantity[]"]').val()       || 0;
         const p  = +r.find('[name="unit_price[]"]').val()     || 0;
         const d  = +r.find('[name="discount_value[]"]').val() || 0;
@@ -589,6 +631,7 @@ function calc(){
         const da = dt === 'flat' ? d : b * d / 100;
         const g  = Math.max(0, b - da);
         const ta = tx > 0 ? g * tx / (100 + tx) : 0;
+        r.find('.line-total').text(money(g));
         sub    += g - ta;
         tax    += ta;
         weight += q * itemWeight;
@@ -632,11 +675,12 @@ function autoSelectUnits($row){
 }
 
 // ── Add line row ──────────────────────────────────────────────────────────────
-function addLine(data = {}) {
+function addLine(data = {}, $after = null) {
 
     const $row = $($('#lineTpl').html());
 
-    $('#lineTable tbody').append($row);
+    if($after && $after.jquery){ $after.after($row); }
+    else { $('#lineTable tbody').append($row); }
 
     // Destroy if already initialized
     if ($row.find('.select2-item').hasClass("select2-hidden-accessible")) {
@@ -674,6 +718,7 @@ function addLine(data = {}) {
     }
 
     calc();
+    return $row;
 }
 
 // ── Drawer render ─────────────────────────────────────────────────────────────
@@ -691,46 +736,70 @@ function renderDrawer(){
     $('#drawerTitle').text(activeRow.find('.item-select option:selected').text() || 'Finished Goods Units');
     $('#drawerHint').text(`Select ${qty} unit(s). ${selected.length} selected.`);
 
-    const filtered = units.filter(u =>
+    const query = $('#unitSearch').val().trim().toLowerCase();
+    $('#clearUnitSearch').prop('hidden', !query);
+    const matchingStatus = units.filter(u =>
         activeFilter === 'all' ||
         (activeFilter === 'sold'      && u.sold) ||
         (activeFilter === 'selected'  && selectedKeys.includes(u.key)) ||
         (activeFilter === 'available' && !u.sold && !usedElsewhere.includes(u.key))
     );
+    const filtered = matchingStatus.filter(u => !query || [u.serial_no, u.batch_no, u.vts_sim, u.buyer_code, u.production_batch_no, u.production_date, u.warehouse]
+        .some(value => String(value ?? '').toLowerCase().includes(query)));
+    $('#unitResults').text(`${filtered.length} of ${matchingStatus.length} units shown`);
 
     $('#unitList').html(filtered.map(u => {
         const checked     = selectedKeys.includes(u.key);
         const unavailable = (u.sold || usedElsewhere.includes(u.key)) && !checked;
         return `<label class="unit-card ${unavailable?'sold':''} ${checked?'selected':''}">
-            <input type="checkbox" class="unit-check" data-key="${u.key}"
+            <input type="checkbox" class="unit-check" data-key="${escapeHtml(u.key)}"
                 ${checked?'checked':''} ${unavailable?'disabled':''}>
             <span>
-                <b>${u.serial_no||'No serial'} / ${u.batch_no||'No purchase batch'}</b>
-                <div class="unit-meta">VTS/SIM ${u.vts_sim||'-'} | Buyer ${u.buyer_code||'-'} | Production ${u.production_batch_no||'-'} | ${u.production_date||'-'}</div>
-                <div class="unit-meta">${unavailable?'Unavailable':(checked?'Selected':'Available')} | Warehouse ${u.warehouse||'-'} | Cost ${money(u.cost_per_unit)}</div>
+                <b>${escapeHtml(u.serial_no||'No serial')} / ${escapeHtml(u.batch_no||'No purchase batch')}</b>
+                <div class="unit-meta">VTS/SIM ${escapeHtml(u.vts_sim||'-')} | Buyer ${escapeHtml(u.buyer_code||'-')} | Production ${escapeHtml(u.production_batch_no||'-')} | ${escapeHtml(u.production_date||'-')}</div>
+                <div class="unit-meta">${unavailable?'Unavailable':(checked?'Selected':'Available')} | Warehouse ${escapeHtml(u.warehouse||'-')} | Cost ${money(u.cost_per_unit)}</div>
             </span>
         </label>`;
-    }).join('') || '<div class="text-muted p-3">No units found for this filter.</div>');
+    }).join('') || '<div class="unit-empty"><i class="fas fa-search" aria-hidden="true"></i><strong>No matching units</strong><div class="small mt-2">Try another search or switch the status filter.</div></div>');
 }
 
 function openDrawer($row){
     activeRow    = $row;
     activeFilter = 'available';
+    $('#unitSearch').val('');
     $('.unit-filter').removeClass('btn-primary').addClass('btn-outline-secondary');
     $('.unit-filter[data-filter="available"]').addClass('btn-primary').removeClass('btn-outline-secondary');
     $('#unitDrawer,#unitBackdrop').addClass('open');
+    $('#unitDrawer').prop('inert', false);
     renderDrawer();
+    $('#unitSearch').trigger('focus');
+}
+function closeDrawer(){
+    $('#unitDrawer,#unitBackdrop').removeClass('open');
+    if(activeRow){ activeRow.find('.choose-units').trigger('focus'); }
+    $('#unitDrawer').prop('inert', true);
+    activeRow = null;
 }
 
 // ── Event bindings ────────────────────────────────────────────────────────────
 
-$('#addLine').click(() => addLine());
+$(document).on('click', '.add-line', function(){
+    const $row = addLine({}, $(this).closest('tr'));
+    $row[0].scrollIntoView({behavior:'smooth', block:'nearest'});
+    $row.find('.item-select').select2('open');
+});
 
 // Recalc on any input/select change
 $(document).on('input change', '#lineTable input,#lineTable select,[name="discount_amount"]', calc);
 
 // Remove row
-$(document).on('click', '.remove-row', function(){ $(this).closest('tr').remove(); calc(); });
+$(document).on('click', '.remove-row', function(){
+    const $row = $(this).closest('tr');
+    $row.find('.select2-item').select2('destroy');
+    $row.remove();
+    if(!$('#lineTable tbody tr').length){ addLine(); }
+    calc();
+});
 
 // Item changed
 $(document).on('change', '.item-select', function(){
@@ -800,7 +869,7 @@ $(document).on('change', '.unit-check', function(){
     let selected = rowSelected(activeRow);
     const itemId = activeRow.find('[name="item_id[]"]').val();
     const units  = UNIT_POOL[itemId] || [];
-    const unit   = units.find(u => u.key === $(this).data('key'));
+    const unit   = units.find(u => String(u.key) === $(this).attr('data-key'));
     const qty    = parseInt(activeRow.find('[name="quantity[]"]').val()) || 1;
 
     if(this.checked){
@@ -811,7 +880,7 @@ $(document).on('change', '.unit-check', function(){
         }
         selected.push(unit);
     } else {
-        selected = selected.filter(u => u.key !== $(this).data('key'));
+        selected = selected.filter(u => String(u.key) !== $(this).attr('data-key'));
     }
     setRowSelected(activeRow, selected);
     renderDrawer();
@@ -829,13 +898,27 @@ $('.unit-filter').click(function(){
 });
 
 // Close drawer
-$('#closeDrawer,#unitBackdrop').click(() => $('#unitDrawer,#unitBackdrop').removeClass('open'));
+$('#closeDrawer,#doneDrawer,#unitBackdrop').click(closeDrawer);
+$('#unitSearch').on('input', renderDrawer).on('keydown', function(event){
+    if(event.key === 'Enter'){ event.preventDefault(); }
+});
+$('#clearUnitSearch').on('click', function(){ $('#unitSearch').val('').trigger('input').trigger('focus'); });
+$(document).on('keydown', function(event){
+    if(!$('#unitDrawer').hasClass('open')) return;
+    if(event.key === 'Escape'){ event.preventDefault(); closeDrawer(); }
+    if(event.key === 'Tab'){
+        const $focusable = $('#unitDrawer').find('button:not([hidden]), input:not(:disabled)');
+        const first = $focusable[0], last = $focusable[$focusable.length - 1];
+        if(event.shiftKey && document.activeElement === first){ event.preventDefault(); last.focus(); }
+        else if(!event.shiftKey && document.activeElement === last){ event.preventDefault(); first.focus(); }
+    }
+});
 
 // Terms template
 $('#termsTemplate').on('change', function(){ if(this.value){ $('#termsBox').val(this.value); } });
 
 // ── Init ──────────────────────────────────────────────────────────────────────
-if(PREFILL_LINES.length){ PREFILL_LINES.forEach(addLine); } else { addLine(); }
+if(PREFILL_LINES.length){ PREFILL_LINES.forEach(data => addLine(data)); } else { addLine(); }
 if($('[name="party_id"]').val()){ fetchAdvances(false); }
 </script>
 @endpush
